@@ -874,23 +874,45 @@
       }
 
       // Markdown formatter using markdown.js library
+      function sanitizeHtml(html) {
+        // Strip dangerous tags/attributes from rendered markdown
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        // Remove script, iframe, object, embed, form tags
+        const dangerous = div.querySelectorAll('script, iframe, object, embed, form, link[rel="import"]');
+        dangerous.forEach(el => el.remove());
+        // Remove event handler attributes from all elements
+        div.querySelectorAll('*').forEach(el => {
+          for (const attr of [...el.attributes]) {
+            if (attr.name.startsWith('on') || attr.name === 'srcdoc' ||
+                (attr.name === 'href' && attr.value.trim().toLowerCase().startsWith('javascript:'))) {
+              el.removeAttribute(attr.name);
+            }
+          }
+        });
+        return div.innerHTML;
+      }
+
       function formatMarkdown(text) {
         if (!text) return '';
-        
+
         try {
+          let html;
           if (typeof markdown !== 'undefined' && markdown.toHTML) {
-            return markdown.toHTML(text);
+            html = markdown.toHTML(text);
           } else {
             console.warn('Markdown library not loaded, falling back to basic formatting');
-            return text
+            html = text
+              .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
               .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
               .replace(/\*(.+?)\*/g, '<em>$1</em>')
               .replace(/`(.+?)`/g, '<code>$1</code>')
               .replace(/\n/g, '<br>');
           }
+          return sanitizeHtml(html);
         } catch (error) {
           console.error('Markdown parsing failed:', error);
-          return text.replace(/\n/g, '<br>');
+          return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
         }
       }
 

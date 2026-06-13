@@ -560,11 +560,38 @@
                     }
                 });
                 
+                // Listen for error events and display them to the user
+                if (window.electronAPI.onOcrError) {
+                    window.electronAPI.onOcrError((event, data) => {
+                        hideLoadingState();
+                        displayError(data?.error || 'Screenshot analysis failed');
+                    });
+                }
+                if (window.electronAPI.onLlmError) {
+                    window.electronAPI.onLlmError((event, data) => {
+                        hideLoadingState();
+                        displayError(data?.error || 'AI processing failed');
+                    });
+                }
+
                 console.log('[LLM-RESPONSE] IPC listeners set up successfully');
             } else {
                 console.error('[LLM-RESPONSE] electronAPI not available!');
             }
         } // end initLLMResponseWindow
+
+        function displayError(message) {
+            const container = document.getElementById('response-container');
+            if (!container) return;
+            container.innerHTML = '';
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = 'padding:24px;color:#f87171;text-align:center;font-size:14px;';
+            errorDiv.innerHTML = '<div style="font-size:24px;margin-bottom:8px;">⚠</div>' +
+                '<div style="font-weight:600;margin-bottom:4px;">Error</div>' +
+                '<div style="color:#fca5a5;font-size:12px;">' +
+                message.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+            container.appendChild(errorDiv);
+        }
 
         function showLoadingState() {
             const loadingElement = document.getElementById('loading');
@@ -593,16 +620,32 @@
             }
         }
 
+        function sanitizeHtml(html) {
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            const dangerous = div.querySelectorAll('script, iframe, object, embed, form, link[rel="import"]');
+            dangerous.forEach(el => el.remove());
+            div.querySelectorAll('*').forEach(el => {
+                for (const attr of [...el.attributes]) {
+                    if (attr.name.startsWith('on') || attr.name === 'srcdoc' ||
+                        (attr.name === 'href' && attr.value.trim().toLowerCase().startsWith('javascript:'))) {
+                        el.removeAttribute(attr.name);
+                    }
+                }
+            });
+            return div.innerHTML;
+        }
+
         function renderMarkdown(text) {
+            let html;
             if (typeof marked !== 'undefined') {
-                return marked.parse ? marked.parse(text) : marked(text);
+                html = marked.parse ? marked.parse(text) : marked(text);
+            } else if (typeof markdown !== 'undefined' && typeof markdown.toHTML === 'function') {
+                html = markdown.toHTML(text);
+            } else {
+                return escapeHtml(text).replace(/\n/g, '<br>');
             }
-
-            if (typeof markdown !== 'undefined' && typeof markdown.toHTML === 'function') {
-                return markdown.toHTML(text);
-            }
-
-            return escapeHtml(text).replace(/\n/g, '<br>');
+            return sanitizeHtml(html);
         }
 
         function calculateContentMetrics(response, codeBlocks) {
@@ -714,8 +757,8 @@
                     element.addEventListener('mouseenter', handleMouseEnter, { passive: true });
                     element.addEventListener('mouseleave', handleMouseLeave, { passive: true });
                     
-                    // Add wheel event for enhanced scrolling
-                    element.addEventListener('wheel', handleWheelScroll, { passive: false });
+                    // Allow natural scrolling — passive: true lets the browser optimize
+                    element.addEventListener('wheel', handleWheelScroll, { passive: true });
                     
                 }
             });
@@ -742,9 +785,7 @@
         }
 
         function handleWheelScroll(e) {
-            // Allow natural scrolling behavior
-            // Don't prevent default to maintain smooth native scrolling
-            console.log('Wheel scroll detected on element');
+            // Allow natural scrolling — no-op handler kept for future customization
         }
 
         function extractCodeBlocks(text) {

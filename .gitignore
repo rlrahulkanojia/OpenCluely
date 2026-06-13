@@ -6,3 +6,4 @@ eng.traineddata
 dist/
 .DS_Store
 *.log
+.claude/

@@ -53,7 +53,7 @@ class WindowManager {
       },
       settings: {
         width: 400,
-        height: 380,
+        height: 560,
         file: 'settings.html',
         title: 'Settings',
         frame: false,
@@ -835,7 +835,19 @@ class WindowManager {
       });
 
       const wasSharing = this.isScreenBeingShared;
-      
+
+      // Detect screen sharing by checking for window sources that indicate
+      // a screen sharing session is active (e.g., "Entire Screen" type sources
+      // with names suggesting sharing applications)
+      const sharingIndicators = sources.filter(source =>
+        source.name.toLowerCase().includes('zoom') ||
+        source.name.toLowerCase().includes('teams') ||
+        source.name.toLowerCase().includes('meet') ||
+        source.name.toLowerCase().includes('screen sharing') ||
+        source.name.toLowerCase().includes('discord')
+      );
+      this.isScreenBeingShared = sharingIndicators.length > 0;
+
       if (wasSharing !== this.isScreenBeingShared) {
         if (this.isScreenBeingShared) {
           this.handleScreenSharingStarted();
@@ -865,8 +877,13 @@ class WindowManager {
 
   handleScreenSharingStarted() {
     logger.info('Screen sharing detected - hiding windows');
-    
+
+    // Snapshot visible windows before hiding so we restore only those
+    this._wasVisibleBeforeHide = new Set();
     this.windows.forEach((window, type) => {
+      if (!window.isDestroyed() && window.isVisible()) {
+        this._wasVisibleBeforeHide.add(type);
+      }
       if (!window.isDestroyed()) {
         window.hide();
         window.setPosition(-10000, -10000);
@@ -916,33 +933,49 @@ class WindowManager {
       return;
     }
 
+    // Only restore windows that were visible before hiding.
+    // Settings and chat are on-demand — never force them open.
+    const alwaysShow = ['main'];
+
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') { // Don't show LLM response unless it has content
+      if (alwaysShow.includes(type)) {
+        this.showOnCurrentDesktop(window);
+      } else if (this._wasVisibleBeforeHide && this._wasVisibleBeforeHide.has(type)) {
         this.showOnCurrentDesktop(window);
       }
+      // llmResponse, settings, chat — skip unless they were previously visible
     });
-    
+
     this.isVisible = true;
+    this._wasVisibleBeforeHide = null; // clear the snapshot
+
     const activeWindow = this.windows.get(this.activeWindow);
     if (activeWindow) {
       activeWindow.focus();
     }
-    
-    logger.info('All windows shown on current desktop', { 
+
+    logger.info('All windows shown on current desktop', {
       activeWindow: this.activeWindow,
-      windowCount: this.windows.size 
+      windowCount: this.windows.size
     });
   }
 
   hideAllWindows() {
+    // Snapshot which windows are currently visible so we can restore only those
+    this._wasVisibleBeforeHide = new Set();
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') {
+      if (!window.isDestroyed() && window.isVisible()) {
+        this._wasVisibleBeforeHide.add(type);
+      }
+      if (!window.isDestroyed()) {
         window.hide();
       }
     });
-    
+
     this.isVisible = false;
-    logger.info('All windows hidden');
+    logger.info('All windows hidden', {
+      previouslyVisible: [...this._wasVisibleBeforeHide]
+    });
   }
 
   toggleVisibility() {

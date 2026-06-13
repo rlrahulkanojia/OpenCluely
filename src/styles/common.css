@@ -541,8 +541,8 @@ body {
     outline-offset: 2px;
 }
 
-/* Smooth transitions */
-* {
+/* Smooth transitions — only apply to interactive elements, not everything */
+button, .btn, .message, .status-dot, .skill-selector, .close-btn {
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
 

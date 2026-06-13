@@ -39,6 +39,18 @@ class ConfigManager {
       },
 
       llm: {
+        claude: {
+          baseUrl: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+          model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+          maxRetries: 3,
+          timeout: 90000,
+          fallbackEnabled: true,
+          generation: {
+            temperature: 0.7,
+            maxOutputTokens: 16384
+          }
+        },
+        // Legacy Gemini config — kept for reference if switching back
         gemini: {
           model: 'gemini-2.5-flash',
           maxRetries: 3,
@@ -49,7 +61,7 @@ class ConfigManager {
             temperature: 0.7,
             topK: 32,
             topP: 0.9,
-            maxOutputTokens: 4096
+            maxOutputTokens: 16384
           }
         }
       },

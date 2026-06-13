@@ -149,25 +149,13 @@ class ApplicationController {
   setupNetworkConfiguration() {
     // Configure session to handle network requests better
     const ses = session.defaultSession;
-    
-    // Allow HTTPS requests to Google APIs
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      if (details.url.includes('generativelanguage.googleapis.com')) {
-        details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
-      }
-      callback({ requestHeaders: details.requestHeaders });
-    });
-    
-    // Handle certificate errors for Google APIs
+
+    // Use default certificate verification for all hosts
     ses.setCertificateVerifyProc((request, callback) => {
-      if (request.hostname === 'generativelanguage.googleapis.com') {
-        callback(0); // Trust Google's certificates
-      } else {
-        callback(-2); // Use default verification
-      }
+      callback(-2); // Use default verification
     });
-    
-    logger.debug('Network configuration applied for Gemini API');
+
+    logger.debug('Network configuration applied for LLM API');
   }
 
   setupPermissions() {
@@ -447,11 +435,13 @@ class ApplicationController {
     });
 
     ipcMain.handle("set-gemini-api-key", (event, apiKey) => {
+      // Now updates the Claude/Anthropic API key
       llmService.updateApiKey(apiKey);
       return llmService.getStats();
     });
 
     ipcMain.handle("get-gemini-status", () => {
+      // Returns stats for whatever LLM backend is active (Claude or Gemini)
       return llmService.getStats();
     });
 
@@ -482,18 +472,21 @@ class ApplicationController {
     });
 
     ipcMain.handle("test-gemini-connection", async () => {
+      // Now tests the active LLM backend (Claude or Gemini)
       return await llmService.testConnection();
     });
 
     ipcMain.handle("run-gemini-diagnostics", async () => {
+      // Now runs diagnostics for the active LLM backend
       try {
         const connectivity = await llmService.checkNetworkConnectivity();
         const apiTest = await llmService.testConnection();
-        
+
         return {
           success: true,
           connectivity,
           apiTest,
+          llmStats: llmService.getStats(),
           timestamp: new Date().toISOString()
         };
       } catch (error) {
@@ -714,9 +707,8 @@ class ApplicationController {
   }
 
   navigateSkill(direction) {
-    const availableSkills = [
-      "dsa",
-    ];
+    const { promptLoader } = require('./prompt-loader');
+    const availableSkills = promptLoader.getAvailableSkills();
 
     const currentIndex = availableSkills.indexOf(this.activeSkill);
     if (currentIndex === -1) {
@@ -760,9 +752,16 @@ class ApplicationController {
     const startTime = Date.now();
 
     try {
-      windowManager.showLLMLoading();
+      // IMPORTANT: Capture BEFORE showing loading overlay to avoid
+      // polluting the screenshot with our own UI elements
+      windowManager.hideAllWindows();
+      // Brief delay to ensure windows are fully hidden before capture
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
   const capture = await captureService.captureAndProcess();
+
+      // Now show loading state after screenshot is taken
+      windowManager.showLLMLoading();
 
       if (!capture.imageBuffer || !capture.imageBuffer.length) {
         windowManager.hideLLMResponse();
