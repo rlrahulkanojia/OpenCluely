@@ -121,12 +121,22 @@ class LLMService {
       ];
 
       const genConfig = this.getGenerationConfig();
-      const responseText = await this._makeClaudeRequest({
+      const request = {
         system: this._buildSystemPrompt(skillPrompt),
         messages,
         max_tokens: genConfig.maxOutputTokens,
         temperature: genConfig.temperature
-      });
+      };
+
+      const thinkingEnabled = config.get('llm.extendedThinking') || false;
+      if (thinkingEnabled) {
+        request.thinking = true;
+        request.thinking_budget = config.get('llm.thinkingBudget') || 10000;
+      }
+
+      const result = await this._makeClaudeRequest(request);
+      const responseText = typeof result === 'string' ? result : result.text;
+      const thinkingText = typeof result === 'object' ? result.thinking : null;
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
@@ -142,6 +152,7 @@ class LLMService {
 
       return {
         response: finalResponse,
+        thinking: thinkingText,
         metadata: {
           skill: activeSkill,
           programmingLanguage,
@@ -188,7 +199,9 @@ class LLMService {
 
     try {
       const request = this._buildTextRequest(text, activeSkill, sessionMemory, programmingLanguage);
-      const responseText = await this._makeClaudeRequest(request);
+      const result = await this._makeClaudeRequest(request);
+      const responseText = typeof result === 'string' ? result : result.text;
+      const thinkingText = typeof result === 'object' ? result.thinking : null;
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
@@ -203,6 +216,7 @@ class LLMService {
 
       return {
         response: finalResponse,
+        thinking: thinkingText,
         metadata: {
           skill: activeSkill,
           programmingLanguage,
@@ -259,12 +273,22 @@ class LLMService {
       messages = this._fixMessageAlternation(messages);
 
       const genConfig = this.getGenerationConfig();
-      const responseText = await this._makeClaudeRequest({
+      const request = {
         system: this._buildSystemPrompt(systemPrompt),
         messages,
         max_tokens: genConfig.maxOutputTokens,
         temperature: genConfig.temperature
-      });
+      };
+
+      const thinkingEnabled = config.get('llm.extendedThinking') || false;
+      if (thinkingEnabled) {
+        request.thinking = true;
+        request.thinking_budget = config.get('llm.thinkingBudget') || 10000;
+      }
+
+      const result = await this._makeClaudeRequest(request);
+      const responseText = typeof result === 'string' ? result : result.text;
+      const thinkingText = typeof result === 'object' ? result.thinking : null;
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
@@ -272,6 +296,7 @@ class LLMService {
 
       return {
         response: finalResponse,
+        thinking: thinkingText,
         metadata: {
           skill: activeSkill,
           programmingLanguage,
@@ -317,12 +342,20 @@ class LLMService {
     messages = this._fixMessageAlternation(messages);
 
     const genConfig = this.getGenerationConfig();
-    return {
+    const request = {
       system: this._buildSystemPrompt(skillPrompt),
       messages,
       max_tokens: genConfig.maxOutputTokens,
       temperature: genConfig.temperature
     };
+
+    const thinkingEnabled = config.get('llm.extendedThinking') || false;
+    if (thinkingEnabled) {
+      request.thinking = true;
+      request.thinking_budget = config.get('llm.thinkingBudget') || 10000;
+    }
+
+    return request;
   }
 
   /**
@@ -372,6 +405,15 @@ class LLMService {
           body.system = requestBody.system;
         }
 
+        if (requestBody.thinking) {
+          body.thinking = {
+            type: "enabled",
+            budget_tokens: requestBody.thinking_budget || 10000
+          };
+          // Claude requires temperature=1 or omitted when thinking is enabled
+          delete body.temperature;
+        }
+
         const postData = JSON.stringify(body);
         const parsedUrl = new URL(`${this.baseUrl}/v1/messages`);
         const isHttps = parsedUrl.protocol === 'https:';
@@ -415,7 +457,12 @@ class LLMService {
 
                 const response = JSON.parse(data);
 
-                // Extract text from Claude response format
+                // Extract thinking blocks (extended thinking)
+                const thinkingBlocks = (response.content || [])
+                  .filter(block => block.type === 'thinking')
+                  .map(block => block.thinking);
+
+                // Extract text blocks
                 const textBlocks = (response.content || [])
                   .filter(block => block.type === 'text')
                   .map(block => block.text);
@@ -426,6 +473,7 @@ class LLMService {
                 }
 
                 const text = textBlocks.join('\n');
+                const thinking = thinkingBlocks.length ? thinkingBlocks.join('\n') : null;
 
                 if (response.stop_reason === 'max_tokens') {
                   logger.warn('Claude response reached max tokens limit');
@@ -434,12 +482,13 @@ class LLMService {
                 logger.debug('Claude API request successful', {
                   attempt,
                   responseLength: text.length,
+                  hasThinking: !!thinking,
                   stopReason: response.stop_reason,
                   inputTokens: response.usage?.input_tokens,
                   outputTokens: response.usage?.output_tokens
                 });
 
-                resolve(text);
+                resolve({ text, thinking });
               } catch (parseError) {
                 reject(new Error(`Failed to parse Claude response: ${parseError.message}`));
               }
@@ -592,11 +641,12 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     if (!this.isInitialized) return { success: false, error: 'Service not initialized' };
     try {
       const startTime = Date.now();
-      const response = await this._makeClaudeRequest({
+      const result = await this._makeClaudeRequest({
         messages: [{ role: 'user', content: 'Test connection. Respond with OK.' }],
         max_tokens: 10,
         temperature: 0
       });
+      const response = typeof result === 'string' ? result : result.text;
       return { success: true, response, latency: Date.now() - startTime };
     } catch (error) {
       return { success: false, error: error.message };
