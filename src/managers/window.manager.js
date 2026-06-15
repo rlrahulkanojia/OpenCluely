@@ -32,28 +32,21 @@ class WindowManager {
     
     this.windowConfigs = {
       main: {
-        width: 520,
+        width: 400,
         height: 35,
         useContentSize: true,
         file: 'index.html',
         title: 'OpenCluely'
       },
       chat: {
-        width: 500,
-        height: 700,
+        width: 700,
+        height: 600,
         file: 'chat.html',
         title: 'Chat'
       },
-      llmResponse: {
-        width: 840,
-        height: 480,
-        file: 'llm-response.html',
-        title: 'AI Response',
-        alwaysOnTop: true
-      },
       settings: {
         width: 400,
-        height: 560,
+        height: 600,
         file: 'settings.html',
         title: 'Settings',
         frame: false,
@@ -69,6 +62,8 @@ class WindowManager {
         fullscreenable: false
       }
     };
+
+    this.sessionState = 'idle'; // 'idle' | 'active' | 'paused'
 
     this.init();
   }
@@ -89,19 +84,17 @@ class WindowManager {
     try {
       await this.createMainWindow();
       await this.createChatWindow();
-      await this.createLLMResponseWindow();
       await this.createSettingsWindow();
-      
+
       this.setupWindowEventHandlers();
       this.setupScreenTracking();
       this.setupScreenSharingDetection();
-
-      // Make windows interactive by default so they are not click-through
       this.setInteractive(true);
-      
+
       this.isInitialized = true;
       this.isInitializing = false;
-      logger.info('All windows initialized successfully');
+      // Do NOT show windows — wait for startSession()
+      logger.info('All windows initialized (hidden until session start)');
     } catch (error) {
       this.isInitializing = false;
       logger.error('Failed to initialize windows', { error: error.message });
@@ -115,8 +108,7 @@ class WindowManager {
     }
     const window = await this.createWindow('main', false); // Don't show during creation
     this.windows.set('main', window);
-    this.isVisible = true;
-    
+
     // Immediate always-on-top enforcement for main window
     if (process.platform === 'darwin') {
       try {
@@ -127,30 +119,7 @@ class WindowManager {
     } else {
       window.setAlwaysOnTop(true);
     }
-    
-    // DevTools can be opened manually if needed for debugging
-    // window.webContents.openDevTools({ mode: 'detach' });
-    
-    // Wait for app to fully initialize and detect current desktop
-    setTimeout(() => {
-      this.showOnCurrentDesktop(window);
-      
-      // Additional enforcement after showing
-      setTimeout(() => {
-        if (!window.isDestroyed()) {
-          if (process.platform === 'darwin') {
-            try {
-              window.setAlwaysOnTop(true, 'screen-saver', 2);
-            } catch (error) {
-              window.setAlwaysOnTop(true, 'floating', 2);
-            }
-          } else {
-            window.setAlwaysOnTop(true);
-          }
-        }
-      }, 200);
-    }, 100);
-    
+
     return window;
   }
 
@@ -160,24 +129,6 @@ class WindowManager {
     }
     const window = await this.createWindow('chat');
     this.windows.set('chat', window);
-    window.hide();
-    return window;
-  }
-
-  async createLLMResponseWindow() {
-    if (this.windows.has('llmResponse')) {
-      return this.windows.get('llmResponse');
-    }
-    const window = await this.createWindow('llmResponse');
-    this.windows.set('llmResponse', window);
-    
-    // Add console message listener to see renderer logs in main process
-    window.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      if (message.includes('LLM-RESPONSE')) {
-        logger.info(`[RENDERER] ${message}`);
-      }
-    });
-    
     window.hide();
     return window;
   }
@@ -256,8 +207,8 @@ class WindowManager {
         backgroundColor: '#00000000',
   // Allow resizing so users can adjust width; we will lock height in handlers
   resizable: true,
-    // Keep the original max width as cap; allow small min width so it can collapse to one icon
-    minWidth: 60,
+    // Keep the original max width as cap; allow small min width for compact mode
+    minWidth: 200,
     maxWidth: this.windowConfigs.main.width,
         minimizable: false,
         maximizable: false,
@@ -272,28 +223,6 @@ class WindowManager {
           acceptFirstMouse: true,
           disableAutoHideCursor: true,
           type: 'panel'
-        }),
-        level: process.platform === 'darwin' ? 'floating' : undefined,
-      };
-    } else if (type === 'llmResponse') {
-      // LLM Response window - completely frameless, just content
-      browserWindowOptions = {
-        ...baseOptions,
-        frame: false,
-        titleBarStyle: 'hidden',
-        transparent: true,
-        backgroundColor: '#00000000',
-        resizable: true,
-        minimizable: false,
-        maximizable: false,
-        closable: false,
-        hasShadow: false,
-        thickFrame: false,
-        ...(process.platform === 'darwin' && {
-          titleBarStyle: 'hiddenInset',
-          trafficLightPosition: { x: -100, y: -100 },
-          type: 'panel',
-          acceptFirstMouse: true
         }),
         level: process.platform === 'darwin' ? 'floating' : undefined,
       };
@@ -379,7 +308,7 @@ class WindowManager {
         // Height is managed dynamically; don't lock here to allow programmatic changes
         if (typeof window.setMinimumSize === 'function') {
           // Set a conservative minimum width; height will be adjusted via IPC as needed
-          window.setMinimumSize(60, windowConfig.height);
+          window.setMinimumSize(200, windowConfig.height);
         }
 
         // Intercept user-initiated resizes to lock height and allow width changes only
@@ -389,7 +318,7 @@ class WindowManager {
             const [_, currentContentHeight] = window.getContentSize();
             event.preventDefault();
             // Enforce width within min/max bounds
-            const minW = 60;
+            const minW = 200;
             const maxW = this.windowConfigs.main.width;
             const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
             window.setContentSize(desiredW, Math.max(1, currentContentHeight));
@@ -398,7 +327,7 @@ class WindowManager {
             try {
               const [__w, currentWindowHeight] = window.getSize();
               event.preventDefault();
-              const minW = 60;
+              const minW = 200;
               const maxW = this.windowConfigs.main.width;
               const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
               window.setSize(desiredW, Math.max(1, currentWindowHeight));
@@ -586,20 +515,19 @@ class WindowManager {
     const display = this.currentDisplay || screen.getPrimaryDisplay();
     const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea || display.workAreaSize;
     
-    if (this.bindWindows && (type === 'main' || type === 'llmResponse')) {
+    if (this.bindWindows && (type === 'main' || type === 'chat')) {
       // Position bound windows together
       this.positionBoundWindows();
       return;
     }
-    
+
     // All windows positioned at top of screen with small margin
     const topMargin = 20;
     const [windowWidth] = window.getSize();
-    
+
     const positions = {
       main: { x: displayX + 50, y: displayY + topMargin },
       chat: { x: displayX + screenWidth - windowWidth - 50, y: displayY + topMargin },
-      llmResponse: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin },
       settings: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin }
     };
 
@@ -614,99 +542,99 @@ class WindowManager {
     });
   }
 
-  // New method to position bound windows (vertical column layout) - Always at top
+  // Position bound windows (vertical column layout) - Always at top
   positionBoundWindows() {
     const mainWindow = this.windows.get('main');
-    const llmWindow = this.windows.get('llmResponse');
-    
-    if (!mainWindow || !llmWindow) return;
-    
+    const chatWindow = this.windows.get('chat');
+
+    if (!mainWindow || !chatWindow) return;
+
     const display = this.currentDisplay || screen.getPrimaryDisplay();
     const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea;
-    
+
     const [mainWidth, mainHeight] = mainWindow.getSize();
-    const [llmWidth, llmHeight] = llmWindow.getSize();
-    
+    const [chatWidth, chatHeight] = chatWindow.getSize();
+
     // Always position at the top of the screen with small margin
     const topMargin = 20;
     const startY = displayY + topMargin;
-    
+
     // Use the wider window for horizontal centering
-    const maxWidth = Math.max(mainWidth, llmWidth);
-    
+    const maxWidth = Math.max(mainWidth, chatWidth);
+
     // Center horizontally on the display
     const xPosition = displayX + Math.round((screenWidth - maxWidth) / 2);
-    
+
     // Ensure windows don't go outside screen bounds horizontally
     const adjustedMainX = Math.max(displayX, Math.min(displayX + screenWidth - mainWidth, xPosition));
-    const adjustedLlmX = Math.max(displayX, Math.min(displayX + screenWidth - llmWidth, xPosition));
-    
+    const adjustedChatX = Math.max(displayX, Math.min(displayX + screenWidth - chatWidth, xPosition));
+
     // Position main window (top)
     const mainX = adjustedMainX;
     const mainY = startY;
     mainWindow.setPosition(mainX, mainY);
-    
-    // Position LLM response window below with gap
-    const llmX = adjustedLlmX;
-    const llmY = startY + mainHeight + this.windowGap;
-    llmWindow.setPosition(llmX, llmY);
-    
+
+    // Position chat window below with gap
+    const chatX = adjustedChatX;
+    const chatY = startY + mainHeight + this.windowGap;
+    chatWindow.setPosition(chatX, chatY);
+
     // Update stored position (use main window position as reference)
     this.boundWindowsPosition = { x: adjustedMainX, y: startY };
-    
+
     logger.debug('Positioned bound windows at top (column layout)', {
       mainPosition: `${mainX},${mainY}`,
-      llmPosition: `${llmX},${llmY}`,
+      chatPosition: `${chatX},${chatY}`,
       gap: this.windowGap,
       topMargin: topMargin,
       display: display.id
     });
   }
 
-  // New method to move bound windows (column layout) - Maintains top positioning preference
+  // Move bound windows (column layout) - Maintains top positioning preference
   moveBoundWindows(deltaX, deltaY) {
     if (!this.bindWindows) return;
-    
+
     const mainWindow = this.windows.get('main');
-    const llmWindow = this.windows.get('llmResponse');
-    
-    if (!mainWindow || !llmWindow) return;
-    
+    const chatWindow = this.windows.get('chat');
+
+    if (!mainWindow || !chatWindow) return;
+
     const display = this.currentDisplay || screen.getPrimaryDisplay();
     const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea;
-    
+
     // Get current positions and sizes
     const [mainX, mainY] = mainWindow.getPosition();
-    const [llmX, llmY] = llmWindow.getPosition();
+    const [chatX, chatY] = chatWindow.getPosition();
     const [mainWidth, mainHeight] = mainWindow.getSize();
-    const [llmWidth, llmHeight] = llmWindow.getSize();
-    
+    const [chatWidth, chatHeight] = chatWindow.getSize();
+
     // Calculate total height for bounds checking
-    const totalHeight = mainHeight + this.windowGap + llmHeight;
+    const totalHeight = mainHeight + this.windowGap + chatHeight;
     const topMargin = 20;
     const minY = displayY + topMargin;
-    
+
     // Calculate new positions with bounds checking
     const newMainX = Math.max(displayX, Math.min(displayX + screenWidth - mainWidth, mainX + deltaX));
     // Ensure we don't go above the top margin or below screen bounds
     const newMainY = Math.max(minY, Math.min(displayY + screenHeight - totalHeight, mainY + deltaY));
-    
-    // LLM window follows the same horizontal movement but maintains vertical relationship
-    const newLlmX = Math.max(displayX, Math.min(displayX + screenWidth - llmWidth, llmX + deltaX));
-    const newLlmY = newMainY + mainHeight + this.windowGap;
-    
+
+    // Chat window follows the same horizontal movement but maintains vertical relationship
+    const newChatX = Math.max(displayX, Math.min(displayX + screenWidth - chatWidth, chatX + deltaX));
+    const newChatY = newMainY + mainHeight + this.windowGap;
+
     // Move both windows
     mainWindow.setPosition(newMainX, newMainY);
-    llmWindow.setPosition(newLlmX, newLlmY);
-    
+    chatWindow.setPosition(newChatX, newChatY);
+
     // Update stored position (use main window as reference)
     this.boundWindowsPosition.x = newMainX;
     this.boundWindowsPosition.y = newMainY;
-    
+
     logger.debug('Moved bound windows (maintaining top preference)', {
       delta: `${deltaX},${deltaY}`,
       newMainPosition: `${newMainX},${newMainY}`,
-      newLlmPosition: `${newLlmX},${newLlmY}`,
+      newChatPosition: `${newChatX},${newChatY}`,
       topMargin: topMargin,
       totalHeight: totalHeight
     });
@@ -714,9 +642,6 @@ class WindowManager {
 
   showOnCurrentDesktop(win) {
     if (!win || win.isDestroyed()) return;
-
-    const llmWin = this.windows.get('llmResponse');
-    const isLLM = llmWin && !llmWin.isDestroyed() && win.id === llmWin.id;
 
     if (process.platform === 'darwin') {
       // macOS: prevent space switching and keep visibility stable
@@ -742,12 +667,9 @@ class WindowManager {
         win.focus();
         setMacOSAlwaysOnTop();
         setTimeout(() => { if (!win.isDestroyed()) setMacOSAlwaysOnTop(); }, 100);
-        // Keep LLM window visible across workspaces; others revert
         setTimeout(() => {
           if (win.isDestroyed()) return;
-          if (!isLLM) {
-            win.setVisibleOnAllWorkspaces(false);
-          }
+          win.setVisibleOnAllWorkspaces(false);
           setMacOSAlwaysOnTop();
         }, 300);
       }, 50);
@@ -759,9 +681,7 @@ class WindowManager {
       win.focus();
       setTimeout(() => {
         if (win.isDestroyed()) return;
-        if (!isLLM) {
-          win.setVisibleOnAllWorkspaces(false);
-        }
+        win.setVisibleOnAllWorkspaces(false);
         win.setAlwaysOnTop(true);
       }, 500);
     }
@@ -933,8 +853,13 @@ class WindowManager {
       return;
     }
 
+    // If session is idle, don't show anything
+    if (this.sessionState === 'idle') {
+      return;
+    }
+
     // Only restore windows that were visible before hiding.
-    // Settings and chat are on-demand — never force them open.
+    // Settings is on-demand — never force it open.
     const alwaysShow = ['main'];
 
     this.windows.forEach((window, type) => {
@@ -943,7 +868,7 @@ class WindowManager {
       } else if (this._wasVisibleBeforeHide && this._wasVisibleBeforeHide.has(type)) {
         this.showOnCurrentDesktop(window);
       }
-      // llmResponse, settings, chat — skip unless they were previously visible
+      // settings — skip unless it was previously visible
     });
 
     this.isVisible = true;
@@ -1147,83 +1072,6 @@ class WindowManager {
     return results;
   }
 
-  showLLMResponse(content, metadata = {}) {
-    logger.debug('showLLMResponse called', {
-      isScreenBeingShared: this.isScreenBeingShared,
-      contentLength: content.length,
-      skill: metadata.skill
-    });
-
-    if (this.isScreenBeingShared) {
-      logger.warn('LLM response blocked due to screen sharing mode');
-      return;
-    }
-
-    const llmWindow = this.windows.get('llmResponse');
-    if (!llmWindow) {
-      logger.error('LLM response window not available');
-      return;
-    }
-
-    // Ensure window is not destroyed before use
-    if (llmWindow.isDestroyed()) {
-      logger.error('LLM response window is destroyed');
-      return;
-    }
-
-    logger.debug('Sending display-llm-response event to window');
-    llmWindow.webContents.send('display-llm-response', {
-      content,
-      metadata,
-      timestamp: new Date().toISOString()
-    });
-    
-    logger.debug('Showing and focusing LLM window');
-    this.showOnCurrentDesktop(llmWindow);
-    
-    // Position bound windows when LLM response is shown
-    if (this.bindWindows) {
-      this.positionBoundWindows();
-    }
-        
-    logger.info('LLM response displayed', {
-      contentLength: content.length,
-      skill: metadata.skill,
-      windowVisible: llmWindow.isVisible(),
-      boundWindows: this.bindWindows
-    });
-  }
-
-  showLLMLoading() {
-    if (this.isScreenBeingShared) {
-      logger.warn('LLM loading blocked due to screen sharing mode');
-      return;
-    }
-
-    const llmWindow = this.windows.get('llmResponse');
-    if (llmWindow) {
-      logger.debug('Showing LLM loading state');
-      llmWindow.webContents.send('show-loading');
-      this.showOnCurrentDesktop(llmWindow);
-      
-      // Position bound windows when LLM loading is shown
-      if (this.bindWindows) {
-        this.positionBoundWindows();
-      }
-      
-      logger.debug('LLM loading window shown');
-    } else {
-      logger.error('LLM window not available for loading state');
-    }
-  }
-
-  hideLLMResponse() {
-    const llmWindow = this.windows.get('llmResponse');
-    if (llmWindow) {
-      llmWindow.hide();
-    }
-  }
-
   showSettings() {
     if (this.isScreenBeingShared) return;
 
@@ -1246,53 +1094,6 @@ class WindowManager {
     if (settingsWindow) {
       settingsWindow.hide();
     }
-  }
-
-  expandLLMWindow(contentMetrics = null) {
-    const llmWindow = this.windows.get('llmResponse');
-    if (!llmWindow || this.isScreenBeingShared) return;
-
-    const optimalSize = this.calculateOptimalWindowSize(contentMetrics);
-    
-    // Ensure we have valid numbers for setSize
-    const width = Math.round(Number(optimalSize.width)) || 840;
-    const height = Math.round(Number(optimalSize.height)) || 480;
-    
-    llmWindow.setSize(width, height);
-    
-    // If windows are bound, position them together; otherwise center the LLM window
-    if (this.bindWindows) {
-      this.positionBoundWindows();
-    } else {
-      this.centerWindow(llmWindow);
-    }
-    
-    logger.debug('LLM window resized', { 
-      newSize: `${width}x${height}`,
-      basedOnContent: !!contentMetrics,
-      boundWindows: this.bindWindows
-    });
-  }
-
-  calculateOptimalWindowSize(contentMetrics) {
-    const display = this.currentDisplay || screen.getPrimaryDisplay();
-    const { width: screenWidth, height: screenHeight } = display.workArea || display.workAreaSize;
-    
-    let width = 840; // Default LLM window width
-    let height = 480; // Default LLM window height
-    
-    if (contentMetrics && typeof contentMetrics === 'object') {
-      const lineCount = Number(contentMetrics.lineCount) || 20;
-      const avgLineLength = Number(contentMetrics.avgLineLength) || 80;
-      
-      width = Math.min(Math.max(avgLineLength * 8, 500), screenWidth * 0.8);
-      height = Math.min(Math.max(lineCount * 25 + 100, 300), screenHeight * 0.8);
-    }
-    
-    return { 
-      width: Math.round(Number(width)) || 840, 
-      height: Math.round(Number(height)) || 480 
-    };
   }
 
   centerWindow(window) {
@@ -1464,20 +1265,20 @@ class WindowManager {
     // Handle bound windows specially
     if (this.bindWindows) {
       const mainWindow = this.windows.get('main');
-      const llmWindow = this.windows.get('llmResponse');
-      
-      if (mainWindow && llmWindow && !mainWindow.isDestroyed() && !llmWindow.isDestroyed()) {
+      const chatWindow = this.windows.get('chat');
+
+      if (mainWindow && chatWindow && !mainWindow.isDestroyed() && !chatWindow.isDestroyed()) {
         // Position bound windows on the new screen and ensure they appear on current desktop
         this.positionBoundWindows();
         if (mainWindow.isVisible()) this.showOnCurrentDesktop(mainWindow);
-        if (llmWindow.isVisible()) this.showOnCurrentDesktop(llmWindow);
+        if (chatWindow.isVisible()) this.showOnCurrentDesktop(chatWindow);
       }
     }
-    
+
     this.windows.forEach((window, type) => {
       if (window && !window.isDestroyed()) {
-        // Skip main and llmResponse if they're bound (already handled above)
-        if (this.bindWindows && (type === 'main' || type === 'llmResponse')) {
+        // Skip main and chat if they're bound (already handled above)
+        if (this.bindWindows && (type === 'main' || type === 'chat')) {
           return;
         }
         
@@ -1500,10 +1301,6 @@ class WindowManager {
           case 'skills':
             newX = displayX + 50;
             newY = displayY + topMargin + 100; // Slightly lower to avoid overlap
-            break;
-          case 'llmResponse':
-            newX = displayX + (displayWidth - windowWidth) / 2;
-            newY = displayY + topMargin;
             break;
           case 'settings':
             newX = displayX + (displayWidth - windowWidth) / 2;
@@ -1591,9 +1388,9 @@ class WindowManager {
     if (enabled) {
       // Position bound windows when binding is enabled
       const mainWindow = this.windows.get('main');
-      const llmWindow = this.windows.get('llmResponse');
-      
-      if (mainWindow && llmWindow) {
+      const chatWindow = this.windows.get('chat');
+
+      if (mainWindow && chatWindow) {
         this.positionBoundWindows();
       }
       
@@ -1667,12 +1464,61 @@ class WindowManager {
         window.webContents.send('skill-changed', { skill });
       }
     });
-    
-    logger.info('Skill change broadcasted to all windows', { 
+
+    logger.info('Skill change broadcasted to all windows', {
       skill,
-      windowCount: this.windows.size 
+      windowCount: this.windows.size
     });
+  }
+
+  // Session lifecycle methods
+
+  startSession() {
+    if (this.sessionState === 'active') return;
+    this.sessionState = 'active';
+    const mainWin = this.windows.get('main');
+    const chatWin = this.windows.get('chat');
+    if (mainWin) this.showOnCurrentDesktop(mainWin);
+    if (chatWin) this.showOnCurrentDesktop(chatWin);
+    this.positionBoundWindows();
+    this.isVisible = true;
+    logger.info('Session started');
+  }
+
+  pauseSession() {
+    if (this.sessionState !== 'active') return;
+    this.sessionState = 'paused';
+    this.hideAllWindows();
+    logger.info('Session paused');
+  }
+
+  resumeSession() {
+    if (this.sessionState !== 'paused') return;
+    this.sessionState = 'active';
+    const mainWin = this.windows.get('main');
+    const chatWin = this.windows.get('chat');
+    if (mainWin) this.showOnCurrentDesktop(mainWin);
+    if (chatWin) this.showOnCurrentDesktop(chatWin);
+    this.positionBoundWindows();
+    this.isVisible = true;
+    logger.info('Session resumed');
+  }
+
+  endSession() {
+    this.sessionState = 'idle';
+    this.hideAllWindows();
+    this.isVisible = false;
+    logger.info('Session ended');
+  }
+
+  toggleSession() {
+    switch (this.sessionState) {
+      case 'idle': this.startSession(); break;
+      case 'active': this.pauseSession(); break;
+      case 'paused': this.resumeSession(); break;
     }
+    return this.sessionState;
+  }
 }
 
 module.exports = new WindowManager();
