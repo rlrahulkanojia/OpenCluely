@@ -32,7 +32,6 @@ class ApplicationController {
     // Window configurations for reference
     this.windowConfigs = {
       main: { title: "OpenCluely" },
-      chat: { title: "Chat" },
       settings: { title: "Settings" },
     };
 
@@ -181,7 +180,6 @@ class ApplicationController {
       "CommandOrControl+Shift+V": () => this.pauseSession(),
       "CommandOrControl+Shift+Q": () => this.endSession(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
-      "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
       "CommandOrControl+,": () => windowManager.showSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
       "Alt+R": () => this.toggleSpeechRecognition(),
@@ -264,6 +262,11 @@ class ApplicationController {
   ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
   ipcMain.handle("list-displays", () => captureService.listDisplays());
   ipcMain.handle("capture-area", (event, options) => captureService.captureAndProcess(options));
+
+    ipcMain.handle("resize-widget", (event, { expanded }) => {
+      windowManager.resizeWidget(!!expanded);
+      return { success: true, expanded: !!expanded };
+    });
     
     // Provide reliable clipboard write via main process
     ipcMain.handle("copy-to-clipboard", (event, text) => {
@@ -300,21 +303,6 @@ class ApplicationController {
       speechService.stopRecording();
     });
 
-    ipcMain.on("chat-window-ready", () => {
-      // Send a test message to confirm communication
-      setTimeout(() => {
-        windowManager.broadcastToAllWindows("transcription-received", {
-          text: "Test message from main process - chat window communication is working!",
-        });
-      }, 1000);
-    });
-
-    ipcMain.on("test-chat-window", () => {
-      windowManager.broadcastToAllWindows("transcription-received", {
-        text: "🧪 IMMEDIATE TEST: Chat window IPC communication test successful!",
-      });
-    });
-
     ipcMain.handle("show-all-windows", () => {
       windowManager.showAllWindows();
       return windowManager.getWindowStats();
@@ -332,11 +320,6 @@ class ApplicationController {
 
     ipcMain.handle("disable-window-interaction", () => {
       windowManager.setInteractive(false);
-      return windowManager.getWindowStats();
-    });
-
-    ipcMain.handle("switch-to-chat", () => {
-      windowManager.switchToWindow("chat");
       return windowManager.getWindowStats();
     });
 
@@ -469,30 +452,8 @@ class ApplicationController {
       return llmService.getStats();
     });
 
-    // Window binding IPC handlers
-    ipcMain.handle("set-window-binding", (event, enabled) => {
-      return windowManager.setWindowBinding(enabled);
-    });
-
-    ipcMain.handle("toggle-window-binding", () => {
-      return windowManager.toggleWindowBinding();
-    });
-
-    ipcMain.handle("get-window-binding-status", () => {
-      return windowManager.getWindowBindingStatus();
-    });
-
     ipcMain.handle("get-window-stats", () => {
       return windowManager.getWindowStats();
-    });
-
-    ipcMain.handle("set-window-gap", (event, gap) => {
-      return windowManager.setWindowGap(gap);
-    });
-
-    ipcMain.handle("move-bound-windows", (event, { deltaX, deltaY }) => {
-      windowManager.moveBoundWindows(deltaX, deltaY);
-      return windowManager.getWindowBindingStatus();
     });
 
     ipcMain.handle("test-gemini-connection", async () => {
@@ -648,7 +609,6 @@ class ApplicationController {
     if (currentStatus.isRecording) {
       try {
         speechService.stopRecording();
-        windowManager.hideChatWindow();
         logger.info("Speech recognition stopped via global shortcut");
       } catch (error) {
         logger.error("Error stopping speech recognition:", error);
@@ -656,7 +616,6 @@ class ApplicationController {
     } else {
       try {
         speechService.startRecording();
-        windowManager.showChatWindow();
         logger.info("Speech recognition started via global shortcut");
       } catch (error) {
         logger.error("Error starting speech recognition:", error);
@@ -721,25 +680,8 @@ class ApplicationController {
     }
   }
 
-  handleLeftArrow() {
-    const isInteractive = windowManager.getWindowStats().isInteractive;
-
-    if (!isInteractive) {
-      // Non-interactive mode: Move window left
-      windowManager.moveBoundWindows(-20, 0);
-    }
-    // Interactive mode: Left arrow does nothing
-  }
-
-  handleRightArrow() {
-    const isInteractive = windowManager.getWindowStats().isInteractive;
-
-    if (!isInteractive) {
-      // Non-interactive mode: Move window right
-      windowManager.moveBoundWindows(20, 0);
-    }
-    // Interactive mode: Right arrow does nothing
-  }
+  handleLeftArrow() { /* no-op in single-widget mode */ }
+  handleRightArrow() { /* no-op in single-widget mode */ }
 
   navigateSkill(direction) {
     const { promptLoader } = require('./prompt-loader');
@@ -801,11 +743,11 @@ class ApplicationController {
         return;
       }
 
-      // Send screenshot data to chat for preview
+      // Send screenshot data to main widget for preview
       const base64 = capture.imageBuffer.toString('base64');
-      const chatWindow = windowManager.getWindow('chat');
-      if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.webContents.send('screenshot-data', {
+      const mainWindow = windowManager.getWindow('main');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('screenshot-data', {
           base64: 'data:' + (capture.mimeType || 'image/png') + ';base64,' + base64
         });
       }
@@ -831,9 +773,9 @@ class ApplicationController {
         isImageAnalysis: true
       });
 
-      // Send response to chat window (not LLM window)
-      if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.webContents.send('display-llm-response', {
+      // Send response to main widget
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('display-llm-response', {
           content: llmResult.response,
           thinking: llmResult.thinking || null,
           metadata: llmResult.metadata,
@@ -880,9 +822,9 @@ class ApplicationController {
         usedFallback: llmResult.metadata.usedFallback,
       });
 
-      const chatWindow = windowManager.getWindow('chat');
-      if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.webContents.send('display-llm-response', {
+      const mainWindow = windowManager.getWindow('main');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('display-llm-response', {
           content: llmResult.response,
           thinking: llmResult.thinking || null,
           metadata: llmResult.metadata,
