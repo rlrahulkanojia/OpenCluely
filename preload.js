@@ -52,9 +52,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   
-  // LLM window specific methods
-  expandLlmWindow: (contentMetrics) => ipcRenderer.invoke('expand-llm-window', contentMetrics),
-  resizeLlmWindowForContent: (contentMetrics) => ipcRenderer.invoke('resize-llm-window-for-content', contentMetrics),
+  // Session lifecycle
+  startSession: () => ipcRenderer.invoke('start-session'),
+  endSession: () => ipcRenderer.invoke('end-session'),
+  pauseSession: () => ipcRenderer.invoke('pause-session'),
+
+  // Extended thinking settings
+  setExtendedThinking: (enabled) => ipcRenderer.invoke('set-extended-thinking', enabled),
+  getExtendedThinking: () => ipcRenderer.invoke('get-extended-thinking'),
 
   // Clipboard helper for reliable copy actions
   copyToClipboard: (text) => {
@@ -91,7 +96,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingStarted: (callback) => ipcRenderer.on('recording-started', callback),
   onRecordingStopped: (callback) => ipcRenderer.on('recording-stopped', callback),
   onCodingLanguageChanged: (callback) => ipcRenderer.on('coding-language-changed', callback),
-  
+  onScreenshotData: (callback) => ipcRenderer.on('screenshot-data', callback),
+  onThinkingEnabledChanged: (callback) => ipcRenderer.on('thinking-enabled-changed', callback),
+  onSessionStateChanged: (callback) => ipcRenderer.on('session-state-changed', callback),
+
   // Generic receive method
   receive: (channel, callback) => ipcRenderer.on(channel, callback),
   
@@ -108,7 +116,8 @@ contextBridge.exposeInMainWorld('api', {
             'toggle-recording',
             'toggle-interaction-mode',
             'update-skill',
-            'window-loaded'
+            'window-loaded',
+            'end-session'
         ];
         if (validChannels.includes(channel)) {
             ipcRenderer.send(channel, data);
