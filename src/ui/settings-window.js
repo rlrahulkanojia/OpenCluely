@@ -1,306 +1,359 @@
-document.addEventListener('DOMContentLoaded', () => {    
-    const logger = {
-        info: (...args) => console.log('[SettingsWindowUI]', ...args)
-    };
+document.addEventListener('DOMContentLoaded', () => {
+    const log = (...args) => console.log('[SettingsUI]', ...args);
 
-    // Get DOM elements
-    const closeButton = document.getElementById('closeButton');
-    const quitButton = document.getElementById('quitButton');
-    const speechProviderSelect = document.getElementById('speechProvider');
-    const azureKeyInput = document.getElementById('azureKey');
-    const azureRegionInput = document.getElementById('azureRegion');
-    const whisperCommandInput = document.getElementById('whisperCommand');
-    const whisperModelInput = document.getElementById('whisperModel');
-    const whisperLanguageInput = document.getElementById('whisperLanguage');
-    const whisperSegmentMsInput = document.getElementById('whisperSegmentMs');
-    const geminiKeyInput = document.getElementById('geminiKey');
-    const windowGapInput = document.getElementById('windowGap');
-    const codingLanguageSelect = document.getElementById('codingLanguage');
-    const activeSkillSelect = document.getElementById('activeSkill');
-    const iconGrid = document.getElementById('iconGrid');
-
-    // Check if window.api exists
+    // --- Guard: require window.api ---
     if (!window.api) {
         console.error('window.api not available');
         return;
     }
 
-    // Request current settings when window opens
-    const requestCurrentSettings = () => {
-        if (window.electronAPI && window.electronAPI.getSettings) {
-            window.electronAPI.getSettings().then(settings => {
-                loadSettingsIntoUI(settings);
-            }).catch(error => {
-                console.error('Failed to get settings:', error);
-            });
+    // ===============================================================
+    //  Dropdown value → display label maps
+    // ===============================================================
+    const LABELS = {
+        codingLanguage: { cpp: 'C++', c: 'C', python: 'Python', java: 'Java', javascript: 'JavaScript' },
+        activeSkill:    { dsa: 'DSA', programming: 'Programming' },
+        speechProvider: { azure: 'Azure', whisper: 'Local Whisper' }
+    };
+
+    // ===============================================================
+    //  1. Collapsible sections
+    // ===============================================================
+    document.querySelectorAll('.collapsible-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const section = header.dataset.section;
+            const body = document.querySelector(`.collapsible-body[data-section="${section}"]`);
+            if (!body) return;
+
+            const arrow = header.querySelector('.arrow');
+            const isCollapsed = body.classList.toggle('collapsed');
+            header.classList.toggle('collapsed', isCollapsed);
+            if (arrow) arrow.textContent = isCollapsed ? '▸' : '▾';
+        });
+    });
+
+    // ===============================================================
+    //  2. Custom dropdown (popover) system
+    // ===============================================================
+    let activePopover = null;
+
+    const openPopover = (trigger, popover) => {
+        closeAllPopovers();
+        // Position the popover below the trigger
+        const rect = trigger.getBoundingClientRect();
+        popover.style.position = 'fixed';
+        popover.style.top = `${rect.bottom + 4}px`;
+        popover.style.left = `${rect.left}px`;
+        popover.style.minWidth = `${rect.width}px`;
+        popover.classList.add('is-open');
+        trigger.classList.add('open');
+        activePopover = { trigger, popover };
+    };
+
+    const closeAllPopovers = () => {
+        if (activePopover) {
+            activePopover.popover.classList.remove('is-open');
+            activePopover.trigger.classList.remove('open');
+            activePopover = null;
         }
     };
 
-    // Close button handler
-    if (closeButton) {
-        closeButton.addEventListener('click', () => {
-            window.api.send('close-settings');
-        });
-    }
+    // Close popovers on outside click
+    document.addEventListener('click', (e) => {
+        if (activePopover &&
+            !activePopover.trigger.contains(e.target) &&
+            !activePopover.popover.contains(e.target)) {
+            closeAllPopovers();
+        }
+    });
 
-    // Quit button handler with multiple attempts
-    if (quitButton) {
-        quitButton.addEventListener('click', () => {
-            try {
-                // Try multiple ways to quit the app
-                if (window.api && window.api.send) {
-                    window.api.send('quit-app');
-                }
-                
-                // Also try the electron API if available
-                if (window.electronAPI && window.electronAPI.quit) {
-                    window.electronAPI.quit();
-                }
-                
-                // Fallback: close the window
-                setTimeout(() => {
-                    window.close();
-                }, 500);
-                
-            } catch (error) {
-                console.error('Error quitting app:', error);
-                window.close();
+    const setupDropdown = (triggerId, popoverId, key, onChange) => {
+        const trigger = document.getElementById(triggerId);
+        const popover = document.getElementById(popoverId);
+        if (!trigger || !popover) return;
+
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (activePopover && activePopover.trigger === trigger) {
+                closeAllPopovers();
+            } else {
+                openPopover(trigger, popover);
+            }
+        });
+
+        popover.querySelectorAll('.popover-option').forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const value = opt.dataset.value;
+                // Update label
+                const label = trigger.querySelector('.dropdown-label');
+                if (label) label.textContent = (LABELS[key] && LABELS[key][value]) || value;
+                // Update selected state
+                popover.querySelectorAll('.popover-option').forEach(o => o.classList.remove('selected'));
+                opt.classList.add('selected');
+                closeAllPopovers();
+                if (onChange) onChange(value);
+            });
+        });
+    };
+
+    const setDropdownValue = (triggerId, popoverId, key, value) => {
+        const trigger = document.getElementById(triggerId);
+        const popover = document.getElementById(popoverId);
+        if (!trigger || !popover) return;
+
+        const label = trigger.querySelector('.dropdown-label');
+        if (label) label.textContent = (LABELS[key] && LABELS[key][value]) || value;
+        popover.querySelectorAll('.popover-option').forEach(o => {
+            o.classList.toggle('selected', o.dataset.value === value);
+        });
+    };
+
+    // Wire up dropdowns
+    setupDropdown('codingLanguageTrigger', 'codingLanguagePopover', 'codingLanguage', (val) => {
+        if (window.electronAPI && window.electronAPI.saveSettings) {
+            window.electronAPI.saveSettings({ codingLanguage: val });
+        } else {
+            saveAllSettings();
+        }
+    });
+
+    setupDropdown('activeSkillTrigger', 'activeSkillPopover', 'activeSkill', (val) => {
+        window.api.send('update-skill', val);
+        saveAllSettings();
+    });
+
+    setupDropdown('speechProviderTrigger', 'speechProviderPopover', 'speechProvider', (val) => {
+        updateSpeechFieldVisibility(val);
+        saveAllSettings();
+    });
+
+    // ===============================================================
+    //  3. Extended thinking toggle
+    // ===============================================================
+    const thinkingToggle = document.getElementById('thinkingToggle');
+    if (thinkingToggle) {
+        thinkingToggle.addEventListener('click', () => {
+            const isActive = thinkingToggle.classList.toggle('active');
+            if (window.electronAPI && window.electronAPI.saveSettings) {
+                window.electronAPI.saveSettings({ extendedThinking: isActive });
+            } else {
+                saveAllSettings();
             }
         });
     }
 
-    // Function to load settings into UI
-    const loadSettingsIntoUI = (settings) => {
-        if (settings.speechProvider && speechProviderSelect) speechProviderSelect.value = settings.speechProvider;
-        if (settings.azureKey && azureKeyInput) azureKeyInput.value = settings.azureKey;
-        if (settings.azureRegion && azureRegionInput) azureRegionInput.value = settings.azureRegion;
-        if (settings.whisperCommand && whisperCommandInput) whisperCommandInput.value = settings.whisperCommand;
-        if (settings.whisperModel && whisperModelInput) whisperModelInput.value = settings.whisperModel;
-        if (settings.whisperLanguage && whisperLanguageInput) whisperLanguageInput.value = settings.whisperLanguage;
-        if (settings.whisperSegmentMs && whisperSegmentMsInput) whisperSegmentMsInput.value = settings.whisperSegmentMs;
-        if (settings.geminiKey && geminiKeyInput) geminiKeyInput.value = settings.geminiKey;
-        if (settings.windowGap && windowGapInput) windowGapInput.value = settings.windowGap;
-        
-        // Set C++ as default if no coding language is specified
-        if (codingLanguageSelect) {
-            codingLanguageSelect.value = settings.codingLanguage || 'cpp';
-        }
-        
-        if (settings.activeSkill && activeSkillSelect) activeSkillSelect.value = settings.activeSkill;
-        
-        // Handle icon selection
-        const selectedIcon = settings.selectedIcon || settings.appIcon;
-        if (selectedIcon && iconGrid) {
-            const iconOptions = iconGrid.querySelectorAll('.icon-option');
-            iconOptions.forEach(option => {
-                if (option.dataset.icon === selectedIcon) {
-                    option.classList.add('selected');
-                } else {
-                    option.classList.remove('selected');
-                }
-            });
-        }
+    // ===============================================================
+    //  4. Speech provider dynamic field visibility
+    // ===============================================================
+    const azureFields = document.getElementById('azureFields');
+    const whisperFields = document.getElementById('whisperFields');
 
-        updateSpeechFieldStates();
+    const updateSpeechFieldVisibility = (provider) => {
+        if (azureFields) azureFields.classList.toggle('hidden', provider !== 'azure');
+        if (whisperFields) whisperFields.classList.toggle('hidden', provider !== 'whisper');
     };
 
-    // Load settings when window opens
+    // ===============================================================
+    //  5. Settings load
+    // ===============================================================
+    const loadSettingsIntoUI = (settings) => {
+        if (!settings) return;
+        log('Loading settings', Object.keys(settings));
+
+        // Dropdowns
+        setDropdownValue('codingLanguageTrigger', 'codingLanguagePopover', 'codingLanguage', settings.codingLanguage || 'cpp');
+        setDropdownValue('activeSkillTrigger', 'activeSkillPopover', 'activeSkill', settings.activeSkill || 'dsa');
+        setDropdownValue('speechProviderTrigger', 'speechProviderPopover', 'speechProvider', settings.speechProvider || 'azure');
+
+        // Extended thinking toggle
+        if (thinkingToggle) {
+            thinkingToggle.classList.toggle('active', !!settings.extendedThinking);
+        }
+
+        // Text inputs
+        const fields = {
+            geminiKey:       settings.geminiKey,
+            azureKey:        settings.azureKey,
+            azureRegion:     settings.azureRegion,
+            whisperCommand:  settings.whisperCommand,
+            whisperModel:    settings.whisperModel,
+            whisperLanguage: settings.whisperLanguage,
+            whisperSegmentMs: settings.whisperSegmentMs,
+            windowGap:       settings.windowGap
+        };
+
+        Object.entries(fields).forEach(([id, val]) => {
+            const el = document.getElementById(id);
+            if (el && val != null) el.value = val;
+        });
+
+        // Speech provider visibility
+        updateSpeechFieldVisibility(settings.speechProvider || 'azure');
+
+        // Icon selection
+        const selectedIcon = settings.selectedIcon || settings.appIcon;
+        if (selectedIcon) {
+            document.querySelectorAll('#iconGrid .icon-option').forEach(opt => {
+                opt.classList.toggle('selected', opt.dataset.icon === selectedIcon);
+            });
+        }
+    };
+
+    const requestCurrentSettings = () => {
+        if (window.electronAPI && window.electronAPI.getSettings) {
+            window.electronAPI.getSettings()
+                .then(loadSettingsIntoUI)
+                .catch(err => console.error('Failed to get settings:', err));
+        }
+    };
+
+    // Listen for load-settings IPC
     window.api.receive('load-settings', (settings) => {
         loadSettingsIntoUI(settings);
     });
 
-    // Listen for settings window shown event
+    // Listen for settings-window-shown via electronAPI
     if (window.electronAPI && window.electronAPI.receive) {
         window.electronAPI.receive('settings-window-shown', () => {
             requestCurrentSettings();
         });
 
-    // Listen for coding language changes from other windows via helper
-    window.electronAPI.onCodingLanguageChanged((event, data) => {
-            if (data && data.language && codingLanguageSelect) {
-                codingLanguageSelect.value = data.language;
-                console.log('Language updated from overlay window:', data.language);
+        // Sync coding language changes from other windows
+        window.electronAPI.onCodingLanguageChanged((event, data) => {
+            if (data && data.language) {
+                setDropdownValue('codingLanguageTrigger', 'codingLanguagePopover', 'codingLanguage', data.language);
             }
-    });
+        });
     }
 
-    // Save settings helper function
-    const saveSettings = () => {
+    // ===============================================================
+    //  6. Settings save (collect all fields)
+    // ===============================================================
+    const saveAllSettings = () => {
         const settings = {};
-        if (speechProviderSelect) settings.speechProvider = speechProviderSelect.value;
-        if (azureKeyInput) settings.azureKey = azureKeyInput.value;
-        if (azureRegionInput) settings.azureRegion = azureRegionInput.value;
-        if (whisperCommandInput) settings.whisperCommand = whisperCommandInput.value;
-        if (whisperModelInput) settings.whisperModel = whisperModelInput.value;
-        if (whisperLanguageInput) settings.whisperLanguage = whisperLanguageInput.value;
-        if (whisperSegmentMsInput) settings.whisperSegmentMs = whisperSegmentMsInput.value;
-        if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
-        if (windowGapInput) settings.windowGap = windowGapInput.value;
-        if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
-        if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
-        
+
+        // Dropdowns - read from selected option
+        const readDropdown = (popoverId) => {
+            const popover = document.getElementById(popoverId);
+            if (!popover) return undefined;
+            const sel = popover.querySelector('.popover-option.selected');
+            return sel ? sel.dataset.value : undefined;
+        };
+
+        const codingLang = readDropdown('codingLanguagePopover');
+        if (codingLang) settings.codingLanguage = codingLang;
+
+        const skill = readDropdown('activeSkillPopover');
+        if (skill) settings.activeSkill = skill;
+
+        const provider = readDropdown('speechProviderPopover');
+        if (provider) settings.speechProvider = provider;
+
+        // Extended thinking
+        if (thinkingToggle) settings.extendedThinking = thinkingToggle.classList.contains('active');
+
+        // Text/number inputs
+        const inputIds = ['geminiKey', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModel', 'whisperLanguage', 'whisperSegmentMs', 'windowGap'];
+        inputIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) settings[id] = el.value;
+        });
+
         window.api.send('save-settings', settings);
     };
 
-    const updateSpeechFieldStates = () => {
-        const provider = speechProviderSelect ? speechProviderSelect.value : 'azure';
-        const azureDisabled = provider !== 'azure';
-        const whisperDisabled = provider !== 'whisper';
-
-        [azureKeyInput, azureRegionInput].forEach(input => {
-            if (input) input.disabled = azureDisabled;
-        });
-
-        [whisperCommandInput, whisperModelInput, whisperLanguageInput, whisperSegmentMsInput].forEach(input => {
-            if (input) input.disabled = whisperDisabled;
-        });
-    };
-
-    // Add event listeners for all inputs
-    const inputs = [
-        speechProviderSelect,
-        azureKeyInput,
-        azureRegionInput,
-        whisperCommandInput,
-        whisperModelInput,
-        whisperLanguageInput,
-        whisperSegmentMsInput,
-        geminiKeyInput,
-        windowGapInput
-    ];
-
-    inputs.forEach(input => {
-        if (input) {
-            input.addEventListener('change', saveSettings);
-            input.addEventListener('blur', saveSettings);
+    // Auto-save on input change/blur
+    const inputIds = ['geminiKey', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModel', 'whisperLanguage', 'whisperSegmentMs', 'windowGap'];
+    inputIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', saveAllSettings);
+            el.addEventListener('blur', saveAllSettings);
         }
     });
 
-    if (speechProviderSelect) {
-        speechProviderSelect.addEventListener('change', () => {
-            updateSpeechFieldStates();
-            saveSettings();
+    // ===============================================================
+    //  7. Icon grid
+    // ===============================================================
+    const iconGrid = document.getElementById('iconGrid');
+    if (iconGrid) {
+        iconGrid.addEventListener('click', (e) => {
+            const option = e.target.closest('.icon-option');
+            if (!option) return;
+
+            iconGrid.querySelectorAll('.icon-option').forEach(o => o.classList.remove('selected'));
+            option.classList.add('selected');
+
+            const iconKey = option.dataset.icon;
+            if (window.electronAPI && window.electronAPI.updateAppIcon) {
+                window.electronAPI.updateAppIcon(iconKey);
+            }
+            window.api.send('save-settings', { selectedIcon: iconKey });
+
+            // Visual feedback
+            option.style.transform = 'scale(0.95)';
+            setTimeout(() => { option.style.transform = ''; }, 100);
         });
     }
 
-    // Language selection handler
-    if (codingLanguageSelect) {
-        codingLanguageSelect.addEventListener('change', (e) => {
-            const lang = e.target.value;
-            // use electronAPI so main broadcast is consistent
-            if (window.electronAPI && window.electronAPI.saveSettings) {
-                window.electronAPI.saveSettings({ codingLanguage: lang });
-            } else {
-                // fallback
-                saveSettings();
+    // ===============================================================
+    //  8. End Session button
+    // ===============================================================
+    const endSessionBtn = document.getElementById('endSessionBtn');
+    if (endSessionBtn) {
+        endSessionBtn.addEventListener('click', () => {
+            if (window.electronAPI && window.electronAPI.endSession) {
+                window.electronAPI.endSession();
+            } else if (window.electronAPI && window.electronAPI.clearSessionMemory) {
+                window.electronAPI.clearSessionMemory();
             }
         });
     }
 
-    // Skill selection handler
-    if (activeSkillSelect) {
-        activeSkillSelect.addEventListener('change', (e) => {
-            saveSettings();
-            // Also update the main window
-            window.api.send('update-skill', e.target.value);
+    // ===============================================================
+    //  9. Close button
+    // ===============================================================
+    const closeButton = document.getElementById('closeButton');
+    if (closeButton) {
+        closeButton.addEventListener('click', () => {
+            if (window.electronAPI && window.electronAPI.hideSettings) {
+                window.electronAPI.hideSettings();
+            } else {
+                window.api.send('close-settings');
+            }
         });
     }
 
-    updateSpeechFieldStates();
-
-    // Initialize icon grid with correct paths
-    const initializeIconGrid = () => {
-        if (!iconGrid) return;
-
-        const icons = [
-            { key: 'terminal', name: 'Terminal', src: './assests/icons/terminal.png' },
-            { key: 'activity', name: 'Activity', src: './assests/icons/activity.png' },
-            { key: 'settings', name: 'Settings', src: './assests/icons/settings.png' }
-        ];
-
-        iconGrid.innerHTML = '';
-
-        icons.forEach(icon => {
-            const iconElement = document.createElement('div');
-            iconElement.className = 'icon-option';
-            iconElement.dataset.icon = icon.key;
-            
-            const img = document.createElement('img');
-            img.src = icon.src;
-            img.alt = icon.name;
-            img.onload = () => {
-                logger.info('Icon loaded successfully:', icon.src);
-            };
-            img.onerror = () => {
-                console.error('Failed to load icon:', icon.src);
-                // Try alternative paths
-                const altPaths = [
-                    `./assests/${icon.key}.png`,
-                    `./assets/icons/${icon.key}.png`,
-                    `./assets/${icon.key}.png`
-                ];
-                
-                let pathIndex = 0;
-                const tryNextPath = () => {
-                    if (pathIndex < altPaths.length) {
-                        img.src = altPaths[pathIndex];
-                        pathIndex++;
-                    } else {
-                        img.style.display = 'none';
-                        console.error('All icon paths failed for:', icon.key);
-                    }
-                };
-                
-                img.onload = () => {
-                    logger.info('Icon loaded with alternative path:', img.src);
-                };
-                
-                img.onerror = tryNextPath;
-                tryNextPath();
-            };
-            
-            const label = document.createElement('div');
-            label.textContent = icon.name;
-            
-            iconElement.appendChild(img);
-            iconElement.appendChild(label);
-            
-            // Click handler for icon selection
-            iconElement.addEventListener('click', () => {                
-                // Remove selection from all icons
-                iconGrid.querySelectorAll('.icon-option').forEach(opt => {
-                    opt.classList.remove('selected');
-                });
-                
-                // Add selection to clicked icon
-                iconElement.classList.add('selected');
-                
-                // Save the selection - this should trigger the app icon change
-                window.api.send('save-settings', { selectedIcon: icon.key });
-                
-                // Show visual feedback
-                iconElement.style.transform = 'scale(0.95)';
-                setTimeout(() => {
-                    iconElement.style.transform = 'scale(1)';
-                }, 100);
-            });
-            
-            iconGrid.appendChild(iconElement);
+    // ===============================================================
+    // 10. Quit button
+    // ===============================================================
+    const quitButton = document.getElementById('quitButton');
+    if (quitButton) {
+        quitButton.addEventListener('click', () => {
+            if (window.electronAPI && window.electronAPI.quit) {
+                window.electronAPI.quit();
+            }
+            window.api.send('quit-app');
         });
-    };
+    }
 
-    // Initialize icon grid
-    initializeIconGrid();
-
-    // Request settings on load
-    setTimeout(() => {
-        requestCurrentSettings();
-    }, 200);
-
-    // ESC key to close
+    // ===============================================================
+    // 11. ESC to close
+    // ===============================================================
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-            window.api.send('close-settings');
+            closeAllPopovers();
+            if (window.electronAPI && window.electronAPI.hideSettings) {
+                window.electronAPI.hideSettings();
+            } else {
+                window.api.send('close-settings');
+            }
         }
     });
-}); 
+
+    // ===============================================================
+    // Init: request current settings after short delay
+    // ===============================================================
+    setTimeout(requestCurrentSettings, 200);
+});
