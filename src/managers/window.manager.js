@@ -25,24 +25,16 @@ class WindowManager {
     this.enforceDebounceMs = 1000; // Only enforce once per second
     this.focusLocked = false; // Prevent focus loops
     
-    // Window binding properties
-    this.bindWindows = true; // Enable window binding by default
-    this.windowGap = 10; // Small gap between windows
-    this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
+    this.isWidgetExpanded = false;
     
     this.windowConfigs = {
       main: {
-        width: 400,
-        height: 35,
+        width: 500,
+        height: 100,
+        expandedHeight: 700,
         useContentSize: true,
         file: 'index.html',
         title: 'OpenCluely'
-      },
-      chat: {
-        width: 700,
-        height: 600,
-        file: 'chat.html',
-        title: 'Chat'
       },
       settings: {
         width: 400,
@@ -83,7 +75,6 @@ class WindowManager {
     
     try {
       await this.createMainWindow();
-      await this.createChatWindow();
       await this.createSettingsWindow();
 
       this.setupWindowEventHandlers();
@@ -123,16 +114,6 @@ class WindowManager {
     return window;
   }
 
-  async createChatWindow() {
-    if (this.windows.has('chat')) {
-      return this.windows.get('chat');
-    }
-    const window = await this.createWindow('chat');
-    this.windows.set('chat', window);
-    window.hide();
-    return window;
-  }
-
   async createSettingsWindow() {
     if (this.windows.has('settings')) {
       return this.windows.get('settings');
@@ -141,6 +122,16 @@ class WindowManager {
     this.windows.set('settings', window);
     window.hide();
     return window;
+  }
+
+  resizeWidget(expanded) {
+    const mainWindow = this.windows.get('main');
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    this.isWidgetExpanded = expanded;
+    const width = this.windowConfigs.main.width;
+    const height = expanded ? this.windowConfigs.main.expandedHeight : this.windowConfigs.main.height;
+    try { mainWindow.setContentSize(width, height); } catch (e) { mainWindow.setSize(width, height); }
+    logger.info('Widget resized', { expanded, width, height });
   }
 
   async createWindow(type, showOnCreate = false) {
@@ -205,15 +196,13 @@ class WindowManager {
         titleBarOverlay: false,
         transparent: true,
         backgroundColor: '#00000000',
-  // Allow resizing so users can adjust width; we will lock height in handlers
-  resizable: true,
-    // Keep the original max width as cap; allow small min width for compact mode
-    minWidth: 200,
-    maxWidth: this.windowConfigs.main.width,
+        resizable: false,
+        minWidth: 500,
+        maxWidth: 500,
         minimizable: false,
         maximizable: false,
         closable: false,
-        hasShadow: false,
+        hasShadow: true,
         useContentSize: windowConfig.useContentSize || false,
         thickFrame: false,
         focusable: true,
@@ -223,30 +212,6 @@ class WindowManager {
           acceptFirstMouse: true,
           disableAutoHideCursor: true,
           type: 'panel'
-        }),
-        level: process.platform === 'darwin' ? 'floating' : undefined,
-      };
-    } else if (type === 'chat') {
-      // Chat window - frameless without window controls
-      browserWindowOptions = {
-        ...baseOptions,
-        minWidth: config.get('window.minWidth'),
-        minHeight: config.get('window.minHeight'),
-        maxWidth: config.get('window.maxWidth'),
-        maxHeight: config.get('window.maxHeight'),
-        frame: false,
-        titleBarStyle: 'hidden',
-        transparent: true,
-        resizable: true,
-        minimizable: false,
-        maximizable: false,
-        closable: false,
-        hasShadow: true,
-        ...(process.platform === 'darwin' && {
-          titleBarStyle: 'hiddenInset',
-          trafficLightPosition: { x: -100, y: -100 },
-          type: 'panel',
-          acceptFirstMouse: true
         }),
         level: process.platform === 'darwin' ? 'floating' : undefined,
       };
@@ -301,49 +266,6 @@ class WindowManager {
       window.setIgnoreMouseEvents(true, { forward: true });
     }
 
-    // Horizontal-only resize behavior for main overlay window
-    if (type === 'main') {
-      try {
-        // Small practical minimum width so it can collapse to roughly one icon width
-        // Height is managed dynamically; don't lock here to allow programmatic changes
-        if (typeof window.setMinimumSize === 'function') {
-          // Set a conservative minimum width; height will be adjusted via IPC as needed
-          window.setMinimumSize(200, windowConfig.height);
-        }
-
-        // Intercept user-initiated resizes to lock height and allow width changes only
-        window.on('will-resize', (event, newBounds) => {
-          try {
-            // Keep current content height; only apply the new width
-            const [_, currentContentHeight] = window.getContentSize();
-            event.preventDefault();
-            // Enforce width within min/max bounds
-            const minW = 200;
-            const maxW = this.windowConfigs.main.width;
-            const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
-            window.setContentSize(desiredW, Math.max(1, currentContentHeight));
-          } catch (e) {
-            // Fallback: lock window height using window size
-            try {
-              const [__w, currentWindowHeight] = window.getSize();
-              event.preventDefault();
-              const minW = 200;
-              const maxW = this.windowConfigs.main.width;
-              const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
-              window.setSize(desiredW, Math.max(1, currentWindowHeight));
-            } catch { /* noop */ }
-          }
-        });
-
-        // When resized (by user or programmatically), keep bound windows aligned at top
-        window.on('resize', () => {
-          if (this.bindWindows) {
-            this.positionBoundWindows();
-          }
-        });
-      } catch { /* ignore */ }
-    }
-    
     // Show window on current desktop if requested
     if (showOnCreate) {
       this.showOnCurrentDesktop(window);
@@ -513,131 +435,16 @@ class WindowManager {
 
   positionWindow(window, type) {
     const display = this.currentDisplay || screen.getPrimaryDisplay();
-    const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea || display.workAreaSize;
-    
-    if (this.bindWindows && (type === 'main' || type === 'chat')) {
-      // Position bound windows together
-      this.positionBoundWindows();
-      return;
-    }
-
-    // All windows positioned at top of screen with small margin
+    const { x: displayX, y: displayY, width: screenWidth } = display.workArea;
     const topMargin = 20;
     const [windowWidth] = window.getSize();
-
     const positions = {
-      main: { x: displayX + 50, y: displayY + topMargin },
-      chat: { x: displayX + screenWidth - windowWidth - 50, y: displayY + topMargin },
-      settings: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin }
+      main: { x: displayX + Math.round((screenWidth - windowWidth) / 2), y: displayY + topMargin },
+      settings: { x: displayX + Math.round((screenWidth - windowWidth) / 2), y: displayY + topMargin }
     };
-
     const position = positions[type] || { x: displayX + 100, y: displayY + topMargin };
     window.setPosition(position.x, position.y);
-    
-    logger.debug('Positioned window at top', {
-      type,
-      position: `${position.x},${position.y}`,
-      topMargin,
-      display: display.id || 'primary'
-    });
-  }
-
-  // Position bound windows (vertical column layout) - Always at top
-  positionBoundWindows() {
-    const mainWindow = this.windows.get('main');
-    const chatWindow = this.windows.get('chat');
-
-    if (!mainWindow || !chatWindow) return;
-
-    const display = this.currentDisplay || screen.getPrimaryDisplay();
-    const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea;
-
-    const [mainWidth, mainHeight] = mainWindow.getSize();
-    const [chatWidth, chatHeight] = chatWindow.getSize();
-
-    // Always position at the top of the screen with small margin
-    const topMargin = 20;
-    const startY = displayY + topMargin;
-
-    // Use the wider window for horizontal centering
-    const maxWidth = Math.max(mainWidth, chatWidth);
-
-    // Center horizontally on the display
-    const xPosition = displayX + Math.round((screenWidth - maxWidth) / 2);
-
-    // Ensure windows don't go outside screen bounds horizontally
-    const adjustedMainX = Math.max(displayX, Math.min(displayX + screenWidth - mainWidth, xPosition));
-    const adjustedChatX = Math.max(displayX, Math.min(displayX + screenWidth - chatWidth, xPosition));
-
-    // Position main window (top)
-    const mainX = adjustedMainX;
-    const mainY = startY;
-    mainWindow.setPosition(mainX, mainY);
-
-    // Position chat window below with gap
-    const chatX = adjustedChatX;
-    const chatY = startY + mainHeight + this.windowGap;
-    chatWindow.setPosition(chatX, chatY);
-
-    // Update stored position (use main window position as reference)
-    this.boundWindowsPosition = { x: adjustedMainX, y: startY };
-
-    logger.debug('Positioned bound windows at top (column layout)', {
-      mainPosition: `${mainX},${mainY}`,
-      chatPosition: `${chatX},${chatY}`,
-      gap: this.windowGap,
-      topMargin: topMargin,
-      display: display.id
-    });
-  }
-
-  // Move bound windows (column layout) - Maintains top positioning preference
-  moveBoundWindows(deltaX, deltaY) {
-    if (!this.bindWindows) return;
-
-    const mainWindow = this.windows.get('main');
-    const chatWindow = this.windows.get('chat');
-
-    if (!mainWindow || !chatWindow) return;
-
-    const display = this.currentDisplay || screen.getPrimaryDisplay();
-    const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea;
-
-    // Get current positions and sizes
-    const [mainX, mainY] = mainWindow.getPosition();
-    const [chatX, chatY] = chatWindow.getPosition();
-    const [mainWidth, mainHeight] = mainWindow.getSize();
-    const [chatWidth, chatHeight] = chatWindow.getSize();
-
-    // Calculate total height for bounds checking
-    const totalHeight = mainHeight + this.windowGap + chatHeight;
-    const topMargin = 20;
-    const minY = displayY + topMargin;
-
-    // Calculate new positions with bounds checking
-    const newMainX = Math.max(displayX, Math.min(displayX + screenWidth - mainWidth, mainX + deltaX));
-    // Ensure we don't go above the top margin or below screen bounds
-    const newMainY = Math.max(minY, Math.min(displayY + screenHeight - totalHeight, mainY + deltaY));
-
-    // Chat window follows the same horizontal movement but maintains vertical relationship
-    const newChatX = Math.max(displayX, Math.min(displayX + screenWidth - chatWidth, chatX + deltaX));
-    const newChatY = newMainY + mainHeight + this.windowGap;
-
-    // Move both windows
-    mainWindow.setPosition(newMainX, newMainY);
-    chatWindow.setPosition(newChatX, newChatY);
-
-    // Update stored position (use main window as reference)
-    this.boundWindowsPosition.x = newMainX;
-    this.boundWindowsPosition.y = newMainY;
-
-    logger.debug('Moved bound windows (maintaining top preference)', {
-      delta: `${deltaX},${deltaY}`,
-      newMainPosition: `${newMainX},${newMainY}`,
-      newChatPosition: `${newChatX},${newChatY}`,
-      topMargin: topMargin,
-      totalHeight: totalHeight
-    });
+    logger.debug('Positioned window', { type, position: `${position.x},${position.y}` });
   }
 
   showOnCurrentDesktop(win) {
@@ -821,11 +628,6 @@ class WindowManager {
   }
 
   switchToWindow(windowType) {
-    if (this.windows.has('chat') && this.windows.get('chat').isVisible()) {
-      this.hideChatWindow();
-      return;
-    }
-
     if (!this.windowConfigs[windowType]) {
       logger.warn('Attempted to switch to unknown window type', { windowType });
       return;
@@ -849,40 +651,18 @@ class WindowManager {
   }
 
   showAllWindows() {
-    if (this.isScreenBeingShared) {
-      return;
+    if (this.isScreenBeingShared) return;
+    if (this.sessionState === 'idle') return;
+    const mainWindow = this.windows.get('main');
+    if (mainWindow) this.showOnCurrentDesktop(mainWindow);
+    if (this._wasVisibleBeforeHide && this._wasVisibleBeforeHide.has('settings')) {
+      const settingsWindow = this.windows.get('settings');
+      if (settingsWindow) this.showOnCurrentDesktop(settingsWindow);
     }
-
-    // If session is idle, don't show anything
-    if (this.sessionState === 'idle') {
-      return;
-    }
-
-    // Only restore windows that were visible before hiding.
-    // Settings is on-demand — never force it open.
-    const alwaysShow = ['main'];
-
-    this.windows.forEach((window, type) => {
-      if (alwaysShow.includes(type)) {
-        this.showOnCurrentDesktop(window);
-      } else if (this._wasVisibleBeforeHide && this._wasVisibleBeforeHide.has(type)) {
-        this.showOnCurrentDesktop(window);
-      }
-      // settings — skip unless it was previously visible
-    });
-
     this.isVisible = true;
-    this._wasVisibleBeforeHide = null; // clear the snapshot
-
-    const activeWindow = this.windows.get(this.activeWindow);
-    if (activeWindow) {
-      activeWindow.focus();
-    }
-
-    logger.info('All windows shown on current desktop', {
-      activeWindow: this.activeWindow,
-      windowCount: this.windows.size
-    });
+    this._wasVisibleBeforeHide = null;
+    if (mainWindow) mainWindow.focus();
+    logger.info('Windows shown', { windowCount: this.windows.size });
   }
 
   hideAllWindows() {
@@ -1259,78 +1039,17 @@ class WindowManager {
 
   moveWindowsToActiveScreen() {
     if (!this.currentDisplay || this.isScreenBeingShared) return;
-
-    const { x: displayX, y: displayY, width: displayWidth, height: displayHeight } = this.currentDisplay.workArea;
-    
-    // Handle bound windows specially
-    if (this.bindWindows) {
-      const mainWindow = this.windows.get('main');
-      const chatWindow = this.windows.get('chat');
-
-      if (mainWindow && chatWindow && !mainWindow.isDestroyed() && !chatWindow.isDestroyed()) {
-        // Position bound windows on the new screen and ensure they appear on current desktop
-        this.positionBoundWindows();
-        if (mainWindow.isVisible()) this.showOnCurrentDesktop(mainWindow);
-        if (chatWindow.isVisible()) this.showOnCurrentDesktop(chatWindow);
-      }
-    }
-
+    const { x: displayX, y: displayY, width: displayWidth } = this.currentDisplay.workArea;
+    const topMargin = 20;
     this.windows.forEach((window, type) => {
       if (window && !window.isDestroyed()) {
-        // Skip main and chat if they're bound (already handled above)
-        if (this.bindWindows && (type === 'main' || type === 'chat')) {
-          return;
-        }
-        
-        const [windowWidth, windowHeight] = window.getSize();
-        
-        let newX, newY;
-        
-        // All windows positioned at top of screen
-        const topMargin = 20;
-        
-        switch (type) {
-          case 'main':
-            newX = displayX + 50;
-            newY = displayY + topMargin;
-            break;
-          case 'chat':
-            newX = displayX + displayWidth - windowWidth - 50;
-            newY = displayY + topMargin;
-            break;
-          case 'skills':
-            newX = displayX + 50;
-            newY = displayY + topMargin + 100; // Slightly lower to avoid overlap
-            break;
-          case 'settings':
-            newX = displayX + (displayWidth - windowWidth) / 2;
-            newY = displayY + topMargin;
-            break;
-          default:
-            newX = displayX + 100;
-            newY = displayY + topMargin;
-        }
-        
+        const [windowWidth] = window.getSize();
+        const newX = displayX + Math.round((displayWidth - windowWidth) / 2);
+        const newY = displayY + topMargin;
         window.setPosition(Math.round(newX), Math.round(newY));
-        
-        // Ensure always-on-top is maintained after moving
-        if (process.platform === 'darwin') {
-          window.setAlwaysOnTop(true, 'screen-saver', 1);
-        } else {
-          window.setAlwaysOnTop(true);
-        }
-        
-        // Ensure window appears on current desktop if it's visible
-        if (window.isVisible()) {
-          this.showOnCurrentDesktop(window);
-        }
-        
-        logger.debug('Window moved to active screen and shown on current desktop', {
-          type,
-          position: `${newX},${newY}`,
-          isVisible: window.isVisible(),
-          displayId: this.currentDisplay.id
-        });
+        if (process.platform === 'darwin') { window.setAlwaysOnTop(true, 'screen-saver', 1); }
+        else { window.setAlwaysOnTop(true); }
+        if (window.isVisible()) this.showOnCurrentDesktop(window);
       }
     });
   }
@@ -1381,83 +1100,6 @@ class WindowManager {
     return this.isScreenBeingShared;
   }
 
-  // Window binding management methods
-  setWindowBinding(enabled) {
-    this.bindWindows = enabled;
-    
-    if (enabled) {
-      // Position bound windows when binding is enabled
-      const mainWindow = this.windows.get('main');
-      const chatWindow = this.windows.get('chat');
-
-      if (mainWindow && chatWindow) {
-        this.positionBoundWindows();
-      }
-      
-      logger.info('Window binding enabled');
-    } else {
-      logger.info('Window binding disabled');
-    }
-    
-    return this.bindWindows;
-  }
-
-  toggleWindowBinding() {
-    return this.setWindowBinding(!this.bindWindows);
-  }
-
-  getWindowBindingStatus() {
-    return {
-      enabled: this.bindWindows,
-      gap: this.windowGap,
-      position: this.boundWindowsPosition
-    };
-  }
-
-  setWindowGap(gap) {
-    this.windowGap = Math.max(0, gap);
-    
-    // Re-position if currently bound
-    if (this.bindWindows) {
-      this.positionBoundWindows();
-    }
-    
-    logger.debug('Window gap updated', { gap: this.windowGap });
-    return this.windowGap;
-  }
-
-  showChatWindow() {
-    const chatWindow = this.windows.get('chat');
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      this.showOnCurrentDesktop(chatWindow);
-      logger.debug('Chat window shown');
-    }
-  }
-
-  hideChatWindow() {
-    const chatWindow = this.windows.get('chat');
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      chatWindow.hide();
-      logger.debug('Chat window hidden');
-    }
-  }
-
-  handleRecordingStarted() {
-    this.isRecording = true;
-    this.showChatWindow();
-    // Notify all windows about recording state
-    this.broadcastToAllWindows('recording-started');
-    logger.debug('Recording started, chat window shown');
-  }
-
-  handleRecordingStopped() {
-    this.isRecording = false;
-    this.hideChatWindow();
-    // Notify all windows about recording state
-    this.broadcastToAllWindows('recording-stopped');
-    logger.debug('Recording stopped, chat window hidden');
-  }
-
   broadcastSkillChange(skill) {
     this.windows.forEach((window, type) => {
       if (!window.isDestroyed()) {
@@ -1477,10 +1119,7 @@ class WindowManager {
     if (this.sessionState === 'active') return;
     this.sessionState = 'active';
     const mainWin = this.windows.get('main');
-    const chatWin = this.windows.get('chat');
     if (mainWin) this.showOnCurrentDesktop(mainWin);
-    if (chatWin) this.showOnCurrentDesktop(chatWin);
-    this.positionBoundWindows();
     this.isVisible = true;
     logger.info('Session started');
   }
@@ -1496,10 +1135,7 @@ class WindowManager {
     if (this.sessionState !== 'paused') return;
     this.sessionState = 'active';
     const mainWin = this.windows.get('main');
-    const chatWin = this.windows.get('chat');
     if (mainWin) this.showOnCurrentDesktop(mainWin);
-    if (chatWin) this.showOnCurrentDesktop(chatWin);
-    this.positionBoundWindows();
     this.isVisible = true;
     logger.info('Session resumed');
   }
