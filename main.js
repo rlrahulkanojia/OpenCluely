@@ -33,7 +33,6 @@ class ApplicationController {
     this.windowConfigs = {
       main: { title: "OpenCluely" },
       chat: { title: "Chat" },
-      llmResponse: { title: "AI Response" },
       settings: { title: "Settings" },
     };
 
@@ -109,6 +108,11 @@ class ApplicationController {
     app.setName("Terminal ");
     process.title = "Terminal ";
 
+    // Hide dock icon for widget mode
+    if (process.platform === 'darwin') {
+      app.dock.hide();
+    }
+
     logger.info("Application starting", {
       version: config.get("app.version"),
       environment: config.get("app.isDevelopment")
@@ -172,20 +176,15 @@ class ApplicationController {
 
   setupGlobalShortcuts() {
     const shortcuts = {
+      "CommandOrControl+Shift+O": () => this.toggleSession(),
       "CommandOrControl+Shift+S": () => this.triggerScreenshotOCR(),
-      "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
+      "CommandOrControl+Shift+V": () => this.pauseSession(),
+      "CommandOrControl+Shift+Q": () => this.endSession(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
-      "CommandOrControl+Shift+\\": () => this.clearSessionMemory(),
       "CommandOrControl+,": () => windowManager.showSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
       "Alt+R": () => this.toggleSpeechRecognition(),
-      "CommandOrControl+Shift+T": () => windowManager.forceAlwaysOnTopForAllWindows(),
-      "CommandOrControl+Shift+Alt+T": () => {
-        const results = windowManager.testAlwaysOnTopForAllWindows();
-        logger.info('Always-on-top test triggered via shortcut', results);
-      },
-      // Context-sensitive shortcuts based on interaction mode
       "CommandOrControl+Up": () => this.handleUpArrow(),
       "CommandOrControl+Down": () => this.handleDownArrow(),
       "CommandOrControl+Left": () => this.handleLeftArrow(),
@@ -392,6 +391,31 @@ class ApplicationController {
       return { success: true };
     });
 
+    ipcMain.handle("start-session", () => {
+      windowManager.startSession();
+      return { success: true, state: windowManager.sessionState };
+    });
+
+    ipcMain.handle("end-session", () => {
+      this.endSession();
+      return { success: true, state: windowManager.sessionState };
+    });
+
+    ipcMain.handle("pause-session", () => {
+      this.pauseSession();
+      return { success: true, state: windowManager.sessionState };
+    });
+
+    ipcMain.handle("set-extended-thinking", (event, enabled) => {
+      config.set('llm.extendedThinking', !!enabled);
+      windowManager.broadcastToAllWindows('thinking-enabled-changed', { enabled: !!enabled });
+      return { success: true, enabled: !!enabled };
+    });
+
+    ipcMain.handle("get-extended-thinking", () => {
+      return { enabled: config.get('llm.extendedThinking') || false };
+    });
+
     ipcMain.handle("force-always-on-top", () => {
       windowManager.forceAlwaysOnTopForAllWindows();
       return { success: true };
@@ -550,18 +574,6 @@ class ApplicationController {
       return { success: true };
     });
 
-    // LLM window specific handlers
-    ipcMain.handle("expand-llm-window", (event, contentMetrics) => {
-      windowManager.expandLLMWindow(contentMetrics);
-      return { success: true, contentMetrics };
-    });
-
-    ipcMain.handle("resize-llm-window-for-content", (event, contentMetrics) => {
-      // Use the same expansion logic for now, can be enhanced later
-      windowManager.expandLLMWindow(contentMetrics);
-      return { success: true, contentMetrics };
-    });
-
     ipcMain.handle("quit-app", () => {
       logger.info("Quit app requested via IPC");
       try {
@@ -662,6 +674,29 @@ class ApplicationController {
     }
   }
 
+  toggleSession() {
+    const newState = windowManager.toggleSession();
+    if (newState === 'idle') {
+      sessionManager.clear();
+      windowManager.broadcastToAllWindows("session-cleared");
+    }
+    logger.info('Session toggled', { newState });
+  }
+
+  pauseSession() {
+    if (windowManager.sessionState === 'active') {
+      windowManager.pauseSession();
+      logger.info('Session paused via shortcut');
+    }
+  }
+
+  endSession() {
+    windowManager.endSession();
+    sessionManager.clear();
+    windowManager.broadcastToAllWindows("session-cleared");
+    logger.info('Session ended, memory cleared');
+  }
+
   handleUpArrow() {
     const isInteractive = windowManager.getWindowStats().isInteractive;
 
@@ -744,34 +779,39 @@ class ApplicationController {
   }
 
   async triggerScreenshotOCR() {
-    if (!this.isReady) {
-      logger.warn("Screenshot requested before application ready");
+    if (!this.isReady || windowManager.sessionState !== 'active') {
+      logger.warn("Screenshot requested but session not active");
       return;
     }
 
     const startTime = Date.now();
 
     try {
-      // IMPORTANT: Capture BEFORE showing loading overlay to avoid
-      // polluting the screenshot with our own UI elements
+      // Hide windows before capture to avoid capturing our own UI
       windowManager.hideAllWindows();
-      // Brief delay to ensure windows are fully hidden before capture
       await new Promise((resolve) => setTimeout(resolve, 150));
 
-  const capture = await captureService.captureAndProcess();
+      const capture = await captureService.captureAndProcess();
 
-      // Now show loading state after screenshot is taken
-      windowManager.showLLMLoading();
+      // Show windows again
+      windowManager.showAllWindows();
 
       if (!capture.imageBuffer || !capture.imageBuffer.length) {
-        windowManager.hideLLMResponse();
         this.broadcastOCRError("Failed to capture screenshot image");
         return;
       }
 
-      // Use image directly with LLM and active skill; do not send chat messages here
-      const sessionHistory = sessionManager.getOptimizedHistory();
+      // Send screenshot data to chat for preview
+      const base64 = capture.imageBuffer.toString('base64');
+      const chatWindow = windowManager.getWindow('chat');
+      if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.webContents.send('screenshot-data', {
+          base64: 'data:' + (capture.mimeType || 'image/png') + ';base64,' + base64
+        });
+      }
 
+      // Process with LLM
+      const sessionHistory = sessionManager.getOptimizedHistory();
       const skillsRequiringProgrammingLanguage = ['dsa'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
@@ -783,7 +823,7 @@ class ApplicationController {
         needsProgrammingLanguage ? this.codingLanguage : null
       );
 
-      // Record model response in session
+      // Record in session
       sessionManager.addModelResponse(llmResult.response, {
         skill: this.activeSkill,
         processingTime: llmResult.metadata.processingTime,
@@ -791,31 +831,21 @@ class ApplicationController {
         isImageAnalysis: true
       });
 
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
+      // Send response to chat window (not LLM window)
+      if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.webContents.send('display-llm-response', {
+          content: llmResult.response,
+          thinking: llmResult.thinking || null,
+          metadata: llmResult.metadata,
+          timestamp: new Date().toISOString()
+        });
+      }
 
       this.broadcastLLMSuccess(llmResult);
     } catch (error) {
-      logger.error("Screenshot OCR process failed", {
-        error: error.message,
-        duration: Date.now() - startTime,
-      });
-
-      windowManager.hideLLMResponse();
+      logger.error("Screenshot OCR failed", { error: error.message, duration: Date.now() - startTime });
+      windowManager.showAllWindows();
       this.broadcastOCRError(error.message);
-      
-      sessionManager.addConversationEvent({
-        role: 'system',
-        content: `Screenshot OCR failed: ${error.message}`,
-        action: 'ocr_error',
-        metadata: {
-          error: error.message
-        }
-      });
     }
   }
 
@@ -850,11 +880,15 @@ class ApplicationController {
         usedFallback: llmResult.metadata.usedFallback,
       });
 
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-      });
+      const chatWindow = windowManager.getWindow('chat');
+      if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.webContents.send('display-llm-response', {
+          content: llmResult.response,
+          thinking: llmResult.thinking || null,
+          metadata: llmResult.metadata,
+          timestamp: new Date().toISOString()
+        });
+      }
 
       this.broadcastLLMSuccess(llmResult);
     } catch (error) {
@@ -863,7 +897,6 @@ class ApplicationController {
         skill: this.activeSkill,
       });
 
-      windowManager.hideLLMResponse();
       sessionManager.addConversationEvent({
         role: 'system',
         content: `LLM processing failed: ${error.message}`,
@@ -1041,22 +1074,8 @@ class ApplicationController {
   onActivate() {
     if (!this.isReady) {
       this.onAppReady();
-    } else {
-      // When app is activated, ensure windows appear on current desktop
-      const mainWindow = windowManager.getWindow("main");
-      if (mainWindow && mainWindow.isVisible()) {
-        windowManager.showOnCurrentDesktop(mainWindow);
-      }
-
-      // Also handle other visible windows
-      windowManager.windows.forEach((window, type) => {
-        if (window.isVisible()) {
-          windowManager.showOnCurrentDesktop(window);
-        }
-      });
-
-      logger.debug("App activated - ensured windows appear on current desktop");
     }
+    // Don't auto-show windows — user must use Cmd+Shift+O
   }
 
   onWillQuit() {
@@ -1076,6 +1095,7 @@ class ApplicationController {
       activeSkill: this.activeSkill || "dsa",
       appIcon: this.appIcon || "terminal",
       selectedIcon: this.appIcon || "terminal",
+      extendedThinking: config.get('llm.extendedThinking') || false,
       // pass through env-derived settings for UI convenience (masked)
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable
@@ -1101,6 +1121,11 @@ class ApplicationController {
       }
       if (settings.appIcon) {
         this.appIcon = settings.appIcon;
+      }
+
+      if (settings.extendedThinking !== undefined) {
+        config.set('llm.extendedThinking', !!settings.extendedThinking);
+        windowManager.broadcastToAllWindows('thinking-enabled-changed', { enabled: !!settings.extendedThinking });
       }
 
       // Handle icon change specifically
