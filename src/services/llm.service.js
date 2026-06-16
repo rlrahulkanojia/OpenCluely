@@ -61,13 +61,11 @@ class LLMService {
   }
 
   /**
-   * Combine the global system prompt with a skill-specific prompt.
+   * Return the system prompt. Skill-specific prompts have been removed —
+   * only the global system.md prompt is used.
    */
-  _buildSystemPrompt(skillPrompt) {
-    const parts = [];
-    if (this.globalSystemPrompt) parts.push(this.globalSystemPrompt);
-    if (skillPrompt) parts.push(skillPrompt);
-    return parts.join('\n\n---\n\n') || undefined;
+  _buildSystemPrompt() {
+    return this.globalSystemPrompt || undefined;
   }
 
   getGenerationConfig(overrides = {}) {
@@ -94,7 +92,6 @@ class LLMService {
     this.requestCount++;
 
     try {
-      const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
       const base64 = imageBuffer.toString('base64');
 
       // Map mime types for Claude's supported media types
@@ -122,7 +119,7 @@ class LLMService {
 
       const genConfig = this.getGenerationConfig();
       const request = {
-        system: this._buildSystemPrompt(skillPrompt),
+        system: this._buildSystemPrompt(),
         messages,
         max_tokens: genConfig.maxOutputTokens,
         temperature: genConfig.temperature
@@ -274,7 +271,7 @@ class LLMService {
 
       const genConfig = this.getGenerationConfig();
       const request = {
-        system: this._buildSystemPrompt(systemPrompt),
+        system: this._buildSystemPrompt(),
         messages,
         max_tokens: genConfig.maxOutputTokens,
         temperature: genConfig.temperature
@@ -317,7 +314,6 @@ class LLMService {
   }
 
   _buildTextRequest(text, activeSkill, sessionMemory, programmingLanguage) {
-    const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
 
     const sessionManager = require('../managers/session.manager');
     let messages = [];
@@ -343,7 +339,7 @@ class LLMService {
 
     const genConfig = this.getGenerationConfig();
     const request = {
-      system: this._buildSystemPrompt(skillPrompt),
+      system: this._buildSystemPrompt(),
       messages,
       max_tokens: genConfig.maxOutputTokens,
       temperature: genConfig.temperature

@@ -7,7 +7,6 @@
   let isExpanded = true;
   let isRecording = false;
   let speechAvailable = false;
-  let activeSkill = 'dsa';
   let activeLang = 'python';
   let chatHistory = [];
   const screenshotStore = [];
@@ -34,9 +33,6 @@
   const stealthBtn       = document.getElementById('stealthBtn');
   const screenshotBtn    = document.getElementById('screenshotBtn');
   const settingsBtn      = document.getElementById('settingsBtn');
-  const skillBtn         = document.getElementById('skillBtn');
-  const skillLabel       = document.getElementById('skillLabel');
-  const skillPopover     = document.getElementById('skillPopover');
   const micBtn           = document.getElementById('micBtn');
   const newChatBtn       = document.getElementById('newChatBtn');
   const expandToggleBtn  = document.getElementById('expandToggleBtn');
@@ -61,12 +57,6 @@
 
   // ---------------------------------------------------------------------------
   // Skill data
-  // ---------------------------------------------------------------------------
-  const skills = [
-    { value: 'dsa', label: 'DSA' },
-    { value: 'programming', label: 'Programming' }
-  ];
-
   // ---------------------------------------------------------------------------
   // Collapse / Expand
   // ---------------------------------------------------------------------------
@@ -537,24 +527,6 @@
     }
   }
 
-  function populateSkillPopover() {
-    skillPopover.innerHTML = '';
-    skills.forEach(function (s) {
-      var div = document.createElement('div');
-      div.className = 'popover-option' + (s.value === activeSkill ? ' selected' : '');
-      div.innerHTML = '<span>' + s.label + '</span><span class="check">✓</span>';
-      div.addEventListener('click', function (e) {
-        e.stopPropagation();
-        activeSkill = s.value;
-        skillLabel.textContent = s.label;
-        populateSkillPopover();
-        closeAllPopovers();
-        if (electronAPI.updateActiveSkill) electronAPI.updateActiveSkill(s.value);
-      });
-      skillPopover.appendChild(div);
-    });
-  }
-
   // ---------------------------------------------------------------------------
   // Input / send
   // ---------------------------------------------------------------------------
@@ -591,10 +563,6 @@
 
   settingsBtn.addEventListener('click', function () {
     if (electronAPI.showSettings) electronAPI.showSettings();
-  });
-
-  skillBtn.addEventListener('click', function (e) {
-    togglePopover(skillPopover, e);
   });
 
   micBtn.addEventListener('click', function () {
@@ -759,18 +727,6 @@
     });
   }
 
-  // Skill changed (from global shortcut)
-  if (electronAPI.onSkillChanged) {
-    electronAPI.onSkillChanged(function (_event, data) {
-      if (data && data.skill) {
-        activeSkill = data.skill;
-        var found = skills.find(function (s) { return s.value === data.skill; });
-        skillLabel.textContent = found ? found.label : data.skill.toUpperCase();
-        populateSkillPopover();
-      }
-    });
-  }
-
   // Error handlers
   if (electronAPI.onOcrError) {
     electronAPI.onOcrError(function (_event, data) {
@@ -789,7 +745,6 @@
   // ---------------------------------------------------------------------------
   // Init
   // ---------------------------------------------------------------------------
-  populateSkillPopover();
   loadHistory();
 
   if (electronAPI.getSpeechAvailability) {
