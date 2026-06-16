@@ -130,8 +130,17 @@ class WindowManager {
     this.isWidgetExpanded = expanded;
     const width = this.windowConfigs.main.width;
     const height = expanded ? this.windowConfigs.main.expandedHeight : this.windowConfigs.main.height;
-    try { mainWindow.setContentSize(width, height); } catch (e) { mainWindow.setSize(width, height); }
-    logger.info('Widget resized', { expanded, width, height });
+
+    // Use setSize (not setContentSize) — more reliable across platforms
+    // Temporarily remove min/max height constraints for the resize
+    try {
+      mainWindow.setMinimumSize(width, Math.min(this.windowConfigs.main.height, height));
+      mainWindow.setMaximumSize(width, Math.max(this.windowConfigs.main.expandedHeight, height));
+      mainWindow.setSize(width, height);
+      logger.info('Widget resized', { expanded, width, height });
+    } catch (e) {
+      logger.error('Widget resize failed', { error: e.message, expanded, width, height });
+    }
   }
 
   async createWindow(type, showOnCreate = false) {
