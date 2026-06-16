@@ -716,9 +716,11 @@ class ApplicationController {
       return;
     }
 
-    // Auto-start session if not active
+    // Auto-start session if not active, then wait for window to be ready
     if (windowManager.sessionState !== 'active') {
       windowManager.startSession();
+      // Wait for the window to fully show and load before proceeding
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
     const startTime = Date.now();
@@ -726,7 +728,7 @@ class ApplicationController {
     try {
       // Hide windows before capture to avoid capturing our own UI
       windowManager.hideAllWindows();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       const capture = await captureService.captureAndProcess();
 

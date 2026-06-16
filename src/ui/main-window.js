@@ -33,7 +33,7 @@
   const interimOverlay   = document.getElementById('interimOverlay');
   const stealthBtn       = document.getElementById('stealthBtn');
   const screenshotBtn    = document.getElementById('screenshotBtn');
-  const visibilityBtn    = document.getElementById('visibilityBtn');
+  const settingsBtn      = document.getElementById('settingsBtn');
   const skillBtn         = document.getElementById('skillBtn');
   const skillLabel       = document.getElementById('skillLabel');
   const skillPopover     = document.getElementById('skillPopover');
@@ -536,8 +536,8 @@
     if (electronAPI.takeScreenshot) electronAPI.takeScreenshot();
   });
 
-  visibilityBtn.addEventListener('click', function () {
-    if (electronAPI.hideAllWindows) electronAPI.hideAllWindows();
+  settingsBtn.addEventListener('click', function () {
+    if (electronAPI.showSettings) electronAPI.showSettings();
   });
 
   skillBtn.addEventListener('click', function (e) {
