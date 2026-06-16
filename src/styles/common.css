@@ -171,8 +171,6 @@ body {
     background: var(--surface-light);
     border-radius: var(--glass-radius-sm);
     border-left: 3px solid rgba(255, 255, 255, 0.2);
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
     min-height: auto;
     height: auto;
     overflow: visible;
@@ -861,6 +859,8 @@ body {
   padding: var(--space-lg);
   display: none;
   -webkit-app-region: no-drag;
+  will-change: scroll-position;
+  -webkit-overflow-scrolling: touch;
 }
 
 .widget-messages::-webkit-scrollbar { width: 4px; }

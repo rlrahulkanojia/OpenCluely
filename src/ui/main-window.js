@@ -8,7 +8,7 @@
   let isRecording = false;
   let speechAvailable = false;
   let activeSkill = 'dsa';
-  let activeLang = 'cpp';
+  let activeLang = 'python';
   let chatHistory = [];
   const screenshotStore = [];
   const SCREENSHOT_CAP = 20;

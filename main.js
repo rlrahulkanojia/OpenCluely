@@ -26,7 +26,7 @@ class ApplicationController {
     this.isReady = false;
     this.activeSkill = "dsa";
   // Default to C++ so language is enforced from first run
-  this.codingLanguage = "cpp";
+  this.codingLanguage = "python";
     this.speechAvailable = false;
 
     // Window configurations for reference

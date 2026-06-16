@@ -196,7 +196,7 @@ class WindowManager {
         titleBarOverlay: false,
         transparent: true,
         backgroundColor: '#00000000',
-        resizable: false,
+        resizable: true, // Must be true for programmatic setContentSize to work
         minWidth: 500,
         maxWidth: 500,
         minimizable: false,
