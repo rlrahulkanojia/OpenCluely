@@ -294,11 +294,6 @@
     var messageDiv = document.createElement('div');
     messageDiv.className = 'message ' + type;
 
-    var timeDiv = document.createElement('div');
-    timeDiv.className = 'message-time';
-    timeDiv.textContent = new Date().toLocaleTimeString();
-    messageDiv.appendChild(timeDiv);
-
     var textDiv = document.createElement('div');
     textDiv.className = 'message-text';
 
@@ -404,10 +399,6 @@
     div.className = 'message assistant thinking';
     div.id = 'thinking-indicator';
 
-    var timeDiv = document.createElement('div');
-    timeDiv.className = 'message-time';
-    timeDiv.textContent = new Date().toLocaleTimeString();
-
     var textDiv = document.createElement('div');
     textDiv.className = 'message-text thinking-dots';
     textDiv.innerHTML =
@@ -415,7 +406,6 @@
       '<span class="dot">•</span>' +
       '<span class="dot">•</span>';
 
-    div.appendChild(timeDiv);
     div.appendChild(textDiv);
     chatMessages.appendChild(div);
     scrollToBottom();
