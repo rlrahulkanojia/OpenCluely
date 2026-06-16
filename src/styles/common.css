@@ -5,8 +5,7 @@
    component styles, and utility classes.
    ============================================================ */
 
-/* --- FontAwesome ------------------------------------------- */
-@import url('../../node_modules/@fortawesome/fontawesome-free/css/all.min.css');
+/* --- FontAwesome loaded via <link> in HTML for faster rendering --- */
 
 /* --- Inter Variable Font ----------------------------------- */
 @font-face {

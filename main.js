@@ -499,6 +499,11 @@ class ApplicationController {
       return { success: true };
     });
 
+    ipcMain.handle("hide-settings", () => {
+      windowManager.hideSettings();
+      return { success: true };
+    });
+
     ipcMain.handle("get-settings", () => {
       return this.getSettings();
     });
