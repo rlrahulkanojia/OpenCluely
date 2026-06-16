@@ -4,7 +4,7 @@
   // ---------------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------------
-  let isExpanded = false;
+  let isExpanded = true;
   let isRecording = false;
   let speechAvailable = false;
   let activeSkill = 'dsa';

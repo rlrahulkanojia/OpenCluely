@@ -26,12 +26,12 @@ class WindowManager {
     this.enforceDebounceMs = 1000; // Only enforce once per second
     this.focusLocked = false; // Prevent focus loops
     
-    this.isWidgetExpanded = false;
+    this.isWidgetExpanded = true;
     
     this.windowConfigs = {
       main: {
         width: 500,
-        height: 110,
+        height: 700,
         expandedHeight: 700,
         useContentSize: true,
         file: 'index.html',

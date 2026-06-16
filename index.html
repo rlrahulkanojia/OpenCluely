@@ -17,7 +17,7 @@
   </style>
 </head>
 <body>
-  <div class="widget-container glass-container" id="widgetContainer">
+  <div class="widget-container glass-container expanded" id="widgetContainer">
 
     <!-- Input Area (top, lighter glass) -->
     <div class="widget-input-area">
@@ -28,7 +28,7 @@
         type="text"
         class="widget-input-field"
         id="messageInput"
-        placeholder="Ask anything about your screen"
+        placeholder="Ask follow-up"
         autocomplete="off"
       />
       <button class="widget-submit-btn" id="submitBtn" title="Send (Enter)">
@@ -87,14 +87,14 @@
 
       <div class="toolbar-spacer"></div>
 
-      <button class="toolbar-text-btn" id="newChatBtn" title="New chat" style="display:none;">
+      <button class="toolbar-text-btn" id="newChatBtn" title="New chat">
         <i class="fas fa-plus"></i>
         New Chat
       </button>
 
       <button class="toolbar-text-btn" id="expandToggleBtn" title="Expand">
         History
-        <i class="fas fa-chevron-down" id="expandIcon"></i>
+        <i class="fas fa-chevron-up" id="expandIcon"></i>
       </button>
     </div>
   </div>
