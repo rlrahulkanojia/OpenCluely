@@ -143,9 +143,11 @@
   }
 
   function scrollToBottom() {
-    if (chatMessages) {
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
+    requestAnimationFrame(function() {
+      if (chatMessages) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -269,12 +271,10 @@
   // ---------------------------------------------------------------------------
 
   /**
-   * Add a message to the chat.
-   * @param {string} text
-   * @param {string} type - 'user' | 'assistant' | 'transcription' | 'error' | 'system'
-   * @param {object} options - { thinking, screenshotBase64, skipPersist }
+   * Create a message DOM element without appending it.
+   * Used by both addMessage (single) and loadHistory (batch).
    */
-  function addMessage(text, type, options) {
+  function createMessageElement(text, type, options) {
     type = type || 'user';
     options = options || {};
 
@@ -284,28 +284,27 @@
     var timeDiv = document.createElement('div');
     timeDiv.className = 'message-time';
     timeDiv.textContent = new Date().toLocaleTimeString();
+    messageDiv.appendChild(timeDiv);
 
     var textDiv = document.createElement('div');
     textDiv.className = 'message-text';
 
-    messageDiv.appendChild(timeDiv);
-
-    // Screenshot-triggered message
+    // Screenshot message
     if (options.screenshotBase64) {
       var ssId = storeScreenshot(options.screenshotBase64);
       textDiv.appendChild(createScreenshotLabel(ssId));
       messageDiv.appendChild(textDiv);
-      appendAndScroll(messageDiv);
-      if (!options.skipPersist) {
-        chatHistory.push({ text: text, type: type, time: Date.now(), screenshot: true });
-        saveHistory();
-      }
-      return;
+      return messageDiv;
     }
 
-    // Assistant messages: label + optional thinking + markdown + copy button
+    if (options.screenshot) {
+      textDiv.textContent = '📷 Screenshot captured';
+      messageDiv.appendChild(textDiv);
+      return messageDiv;
+    }
+
+    // Assistant messages
     if (type === 'assistant') {
-      // "Viewed screen" label for assistant messages
       var labelDiv = document.createElement('div');
       labelDiv.className = 'message-label';
       labelDiv.innerHTML = '<i class="fas fa-eye" style="font-size:10px;"></i> Viewed screen';
@@ -317,7 +316,7 @@
 
       textDiv.innerHTML = renderMarkdown(text);
 
-      // Attach copy buttons to <pre> elements
+      // Copy buttons for code blocks (skip Prism here — done in batch after)
       var pres = textDiv.querySelectorAll('pre');
       pres.forEach(function (pre) {
         var code = pre.querySelector('code');
@@ -326,7 +325,6 @@
 
       messageDiv.appendChild(textDiv);
 
-      // Copy-response button
       var actionsDiv = document.createElement('div');
       actionsDiv.className = 'message-actions';
       var copyRespBtn = document.createElement('button');
@@ -334,25 +332,42 @@
       copyRespBtn.innerHTML = '<i class="fas fa-clipboard"></i>';
       copyRespBtn.title = 'Copy response';
       copyRespBtn.addEventListener('click', function () {
-        if (electronAPI.copyToClipboard) {
-          electronAPI.copyToClipboard(text);
-        } else if (navigator.clipboard) {
-          navigator.clipboard.writeText(text);
-        }
+        if (electronAPI.copyToClipboard) electronAPI.copyToClipboard(text);
+        else if (navigator.clipboard) navigator.clipboard.writeText(text);
       });
       actionsDiv.appendChild(copyRespBtn);
       messageDiv.appendChild(actionsDiv);
-
-      // Syntax highlighting
-      try {
-        if (typeof Prism !== 'undefined') Prism.highlightAllUnder(messageDiv);
-      } catch (_) {}
     } else {
       textDiv.textContent = text;
       messageDiv.appendChild(textDiv);
     }
 
-    appendAndScroll(messageDiv);
+    return messageDiv;
+  }
+
+  /**
+   * Add a message to the chat.
+   * @param {string} text
+   * @param {string} type - 'user' | 'assistant' | 'transcription' | 'error' | 'system'
+   * @param {object} options - { thinking, screenshotBase64, skipPersist }
+   */
+  function addMessage(text, type, options) {
+    type = type || 'user';
+    options = options || {};
+
+    var msgEl = createMessageElement(text, type, options);
+    if (!msgEl) return;
+
+    chatMessages.appendChild(msgEl);
+
+    // Prism highlight for this specific message
+    if (type === 'assistant') {
+      try {
+        if (typeof Prism !== 'undefined') Prism.highlightAllUnder(msgEl);
+      } catch (_) {}
+    }
+
+    scrollToBottom();
 
     if (!options.skipPersist) {
       chatHistory.push({
@@ -360,14 +375,10 @@
         type: type,
         time: Date.now(),
         thinking: options.thinking || null,
+        screenshot: !!options.screenshotBase64,
       });
       saveHistory();
     }
-  }
-
-  function appendAndScroll(el) {
-    chatMessages.appendChild(el);
-    scrollToBottom();
   }
 
   // ---------------------------------------------------------------------------
@@ -392,7 +403,8 @@
 
     div.appendChild(timeDiv);
     div.appendChild(textDiv);
-    appendAndScroll(div);
+    chatMessages.appendChild(div);
+    scrollToBottom();
   }
 
   function hideThinkingIndicator() {
@@ -403,10 +415,14 @@
   // ---------------------------------------------------------------------------
   // History persistence
   // ---------------------------------------------------------------------------
+  var saveHistoryTimer = null;
   function saveHistory() {
-    try {
-      localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory.slice(-500)));
-    } catch (_) {}
+    if (saveHistoryTimer) clearTimeout(saveHistoryTimer);
+    saveHistoryTimer = setTimeout(function() {
+      try {
+        localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory.slice(-500)));
+      } catch (_) {}
+    }, 1000); // Batch writes — save at most once per second
   }
 
   function loadHistory() {
@@ -416,14 +432,27 @@
       var items = JSON.parse(raw);
       if (!Array.isArray(items)) return;
       chatHistory = items;
+
+      // Batch render using DocumentFragment to avoid per-message reflows
+      var fragment = document.createDocumentFragment();
       items.forEach(function (entry) {
-        addMessage(entry.text || '', entry.type || 'user', {
-          skipPersist: true,
+        var msgEl = createMessageElement(entry.text || '', entry.type || 'user', {
           thinking: entry.thinking || null,
-          screenshotBase64: entry.screenshot ? null : undefined,
+          screenshot: entry.screenshot || false,
         });
+        if (msgEl) fragment.appendChild(msgEl);
       });
-      // If there's history, auto-expand
+      chatMessages.appendChild(fragment);
+
+      // Single scroll after all messages are added
+      scrollToBottom();
+
+      // Single Prism highlight pass for all code blocks
+      try {
+        if (typeof Prism !== 'undefined') Prism.highlightAllUnder(chatMessages);
+      } catch (_) {}
+
+      // Auto-expand if there's history
       if (items.length > 0) {
         expandWidget();
       }
