@@ -711,9 +711,14 @@ class ApplicationController {
   }
 
   async triggerScreenshotOCR() {
-    if (!this.isReady || windowManager.sessionState !== 'active') {
-      logger.warn("Screenshot requested but session not active");
+    if (!this.isReady) {
+      logger.warn("Screenshot requested before application ready");
       return;
+    }
+
+    // Auto-start session if not active
+    if (windowManager.sessionState !== 'active') {
+      windowManager.startSession();
     }
 
     const startTime = Date.now();
