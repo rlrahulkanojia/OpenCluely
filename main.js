@@ -658,25 +658,15 @@ class ApplicationController {
 
   handleUpArrow() {
     const isInteractive = windowManager.getWindowStats().isInteractive;
-
     if (isInteractive) {
-      // Interactive mode: Navigate to previous skill
       this.navigateSkill(-1);
-    } else {
-      // Non-interactive mode: Move window up
-      windowManager.moveBoundWindows(0, -20);
     }
   }
 
   handleDownArrow() {
     const isInteractive = windowManager.getWindowStats().isInteractive;
-
     if (isInteractive) {
-      // Interactive mode: Navigate to next skill
       this.navigateSkill(1);
-    } else {
-      // Non-interactive mode: Move window down
-      windowManager.moveBoundWindows(0, 20);
     }
   }
 
