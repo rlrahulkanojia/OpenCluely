@@ -20,7 +20,7 @@
     /* Glass */
     --glass-bg: linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(20, 20, 20, 0.4) 100%);
     --glass-bg-heavy: rgba(12, 12, 12, 0.85);
-    --glass-blur: blur(25px);
+    --glass-blur: blur(12px);
     --glass-blur-light: blur(10px);
     --glass-border: 1px solid rgba(255, 255, 255, 0.1);
     --glass-border-hover: 1px solid rgba(255, 255, 255, 0.2);
@@ -327,7 +327,7 @@ body {
     font-size: var(--text-xs);
     padding: var(--space-xs) var(--space-sm);
     cursor: pointer;
-    transition: all var(--transition-fast);
+    transition: background var(--transition-fast), border-color var(--transition-fast);
     z-index: 10;
 }
 
@@ -384,7 +384,7 @@ body {
     font-family: var(--font-ui);
     font-size: var(--text-base);
     outline: none;
-    transition: all var(--transition-normal);
+    transition: border-color var(--transition-normal), background var(--transition-normal);
 }
 
 .input-field:focus {
@@ -407,7 +407,7 @@ body {
     font-size: var(--text-sm);
     font-weight: 500;
     cursor: pointer;
-    transition: all var(--transition-normal);
+    transition: background var(--transition-normal), color var(--transition-normal);
     display: flex;
     align-items: center;
     gap: var(--space-sm);
@@ -432,7 +432,7 @@ body {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    transition: all var(--transition-slow);
+    transition: background var(--transition-slow), box-shadow var(--transition-slow);
 }
 
 .status-dot.interactive {
@@ -482,13 +482,11 @@ body {
 @keyframes fadeInSlide {
     from {
         opacity: 0;
-        transform: translateX(-8px);
-        background: rgba(16, 185, 129, 0.15);
+        transform: translateX(-10px);
     }
     to {
         opacity: 1;
         transform: translateX(0);
-        background: rgba(16, 185, 129, 0.1);
     }
 }
 
@@ -773,7 +771,6 @@ body {
   flex-direction: column;
   border-radius: var(--glass-radius);
   overflow: hidden;
-  transition: height 0.25s ease;
 }
 
 .widget-input-area {
@@ -838,7 +835,7 @@ body {
   border-radius: var(--glass-radius-xs);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
   flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
@@ -855,7 +852,6 @@ body {
   padding: var(--space-lg);
   display: none;
   -webkit-app-region: no-drag;
-  will-change: scroll-position;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -885,7 +881,7 @@ body {
   color: var(--text-muted);
   font-size: var(--text-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
   position: relative;
 }
 
@@ -908,7 +904,7 @@ body {
   font-size: var(--text-sm);
   font-family: var(--font-ui);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .toolbar-text-btn:hover { color: var(--text-primary); background: var(--surface-light); }
@@ -991,7 +987,7 @@ body {
   font-size: var(--text-xs);
   padding: var(--space-xs);
   border-radius: var(--glass-radius-xs);
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .widget-messages .message.assistant .copy-response-btn:hover {
