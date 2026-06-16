@@ -113,19 +113,41 @@
     return (hash >>> 0).toString(16);
   }
 
+  // Configure marked for fenced code blocks with language tags
+  (function initMarked() {
+    if (typeof marked !== 'undefined') {
+      var markedObj = marked.marked || marked;
+      if (markedObj.setOptions) {
+        markedObj.setOptions({
+          breaks: true,
+          gfm: true,
+          highlight: function(code, lang) {
+            if (typeof Prism !== 'undefined' && lang && Prism.languages[lang]) {
+              try { return Prism.highlight(code, Prism.languages[lang], lang); } catch (_) {}
+            }
+            return code;
+          }
+        });
+      }
+    }
+  })();
+
   function renderMarkdown(text) {
     if (!text) return '';
-    var html;
-    try {
-      if (typeof markdown !== 'undefined' && markdown.toHTML) {
-        html = markdown.toHTML(text);
-      } else if (typeof window !== 'undefined' && window.markdown && window.markdown.toHTML) {
-        html = window.markdown.toHTML(text);
-      }
-    } catch (_) {
-      html = null;
-    }
+    var html = null;
 
+    // Use marked (supports fenced code blocks with ```lang)
+    try {
+      if (typeof marked !== 'undefined') {
+        var markedObj = marked.marked || marked;
+        var parseFn = markedObj.parse || markedObj;
+        if (typeof parseFn === 'function') {
+          html = parseFn(text);
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: basic HTML escaping
     if (!html) {
       html = text
         .replace(/&/g, '&amp;')
@@ -135,6 +157,7 @@
         .replace(/\n/g, '<br>');
     }
 
+    // Sanitize — remove dangerous tags and event handlers
     html = html
       .replace(/<\s*\/?\s*(script|iframe|object|embed)[^>]*>/gi, '')
       .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
@@ -314,6 +337,7 @@
         messageDiv.appendChild(createThinkingSection(options.thinking));
       }
 
+      textDiv.classList.add('markdown-content');
       textDiv.innerHTML = renderMarkdown(text);
 
       // Copy buttons for code blocks (skip Prism here — done in batch after)
