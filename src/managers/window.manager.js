@@ -6,6 +6,7 @@ const config = require('../core/config');
 class WindowManager {
   constructor() {
     this.windows = new Map();
+    this.stealthIntervals = new Map(); // windowId -> intervalId
     this.activeWindow = 'main';
     this.isInteractive = true; // default to interactive so windows are clickable/drag-able
     this.isVisible = false;
@@ -179,6 +180,10 @@ class WindowManager {
       // Completely minimal settings window - no decorations at all
       browserWindowOptions = {
         ...baseOptions,
+        webPreferences: {
+          ...baseOptions.webPreferences,
+          backgroundThrottling: true, // Settings doesn't need to run when hidden
+        },
         frame: false,
         titleBarStyle: 'hidden',
         transparent: true,
@@ -404,34 +409,25 @@ class WindowManager {
       }
     };
     
-    // Event-based enforcement
+    // Event-based enforcement — single call per event, no cascades
     window.on('blur', () => {
-      setTimeout(enforceAlwaysOnTop, 50);
-      setTimeout(enforceAlwaysOnTop, 200);
-      setTimeout(enforceAlwaysOnTop, 500);
+      setTimeout(enforceAlwaysOnTop, 100);
     });
-    
+
     window.on('show', () => {
-      setTimeout(enforceAlwaysOnTop, 50);
-      setTimeout(enforceAlwaysOnTop, 200);
+      setTimeout(enforceAlwaysOnTop, 100);
     });
     
-    window.on('focus', () => {
-      setTimeout(enforceAlwaysOnTop, 50);
-    });
-    
-    window.on('restore', () => {
-      setTimeout(enforceAlwaysOnTop, 50);
-    });
-    
-    // Periodic enforcement every 3 seconds (more frequent)
-    const periodicEnforcement = setInterval(() => {
+    // Store reference so we can clear it when hiding
+    const intervalId = setInterval(() => {
       if (window.isDestroyed()) {
-        clearInterval(periodicEnforcement);
+        clearInterval(intervalId);
+        this.stealthIntervals.delete(window.id);
         return;
       }
       enforceAlwaysOnTop();
-    }, 3000);
+    }, 10000); // Reduced from 3s to 10s — less aggressive, still effective
+    this.stealthIntervals.set(window.id, intervalId);
     
     logger.debug('Applied enhanced stealth measures with aggressive always-on-top', {
       type,
@@ -464,30 +460,22 @@ class WindowManager {
       win.hide();
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
-      const setMacOSAlwaysOnTop = () => {
-        if (win.isDestroyed()) return;
-        try {
-          win.setAlwaysOnTop(true, 'screen-saver', 2);
-        } catch {
-          try { win.setAlwaysOnTop(true, 'pop-up-menu', 2); }
-          catch { try { win.setAlwaysOnTop(true, 'floating', 2); }
-          catch { win.setAlwaysOnTop(true); }}
-        }
-      };
-
-      setMacOSAlwaysOnTop();
+      try {
+        win.setAlwaysOnTop(true, 'floating', 1);
+      } catch {
+        win.setAlwaysOnTop(true);
+      }
 
       setTimeout(() => {
         if (win.isDestroyed()) return;
         win.show();
         win.focus();
-        setMacOSAlwaysOnTop();
-        setTimeout(() => { if (!win.isDestroyed()) setMacOSAlwaysOnTop(); }, 100);
+        // Single re-enforcement after show
         setTimeout(() => {
           if (win.isDestroyed()) return;
+          try { win.setAlwaysOnTop(true, 'floating', 1); } catch { win.setAlwaysOnTop(true); }
           win.setVisibleOnAllWorkspaces(false);
-          setMacOSAlwaysOnTop();
-        }, 300);
+        }, 200);
       }, 50);
     } else {
       // Linux/Windows
@@ -558,7 +546,7 @@ class WindowManager {
     // Reduced frequency to prevent performance issues
     this.screenSharingWatcher = setInterval(async () => {
       await this.checkScreenSharingStatus();
-    }, 5000); // Check every 5 seconds instead of 1
+    }, 30000); // Was 5000 — desktopCapturer.getSources is very expensive
 
     logger.info('Screen sharing detection initialized');
   }
@@ -969,7 +957,11 @@ class WindowManager {
     });
     
     this.windows.clear();
-    
+
+    // Clear all stealth enforcement intervals
+    this.stealthIntervals.forEach((intervalId) => clearInterval(intervalId));
+    this.stealthIntervals.clear();
+
     // Clean up all watchers
     if (this.screenWatcher) {
       clearInterval(this.screenWatcher);
@@ -1009,10 +1001,9 @@ class WindowManager {
       this.handleDisplayChange();
     });
 
-    // More frequent tracking during initialization
     this.screenWatcher = setInterval(() => {
       this.trackActiveScreen();
-    }, 2000);
+    }, 10000); // Was 2000 — cursor tracking every 10s is sufficient
 
     // SIMPLIFIED desktop tracking
     this.setupDesktopTracking();
