@@ -5,18 +5,22 @@
   // State
   // ---------------------------------------------------------------------------
   let isExpanded = true;
-  let isRecording = false;
-  let speechAvailable = false;
   let activeLang = 'python';
-  let chatHistory = [];
   const screenshotStore = [];
   const SCREENSHOT_CAP = 20;
-  const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
-  let listeningStartTime = null;
-  let listeningTimer = null;
   const recentHashes = new Set();
   const HASH_LIMIT = 50;
   let screenshotIdCounter = 0;
+
+  // Streaming state
+  var activeStreamId = null;
+  var lastCompletedStreamId = null;
+  var streamTextBuffer = '';
+  var streamThinkingBuffer = '';
+  var streamMsgEl = null;
+  var streamTextDiv = null;
+  var streamThinkingSection = null;
+  var streamRenderTimer = null;
 
   // ---------------------------------------------------------------------------
   // DOM references
@@ -26,14 +30,9 @@
   const messageInput     = document.getElementById('messageInput');
   const submitBtn        = document.getElementById('submitBtn');
   const chatMessages     = document.getElementById('chatMessages');
-  const listeningArea    = document.getElementById('listeningArea');
-  const listeningIndicator = document.getElementById('listeningIndicator');
-  const listeningDuration = document.getElementById('listeningDuration');
-  const interimOverlay   = document.getElementById('interimOverlay');
   const stealthBtn       = document.getElementById('stealthBtn');
   const screenshotBtn    = document.getElementById('screenshotBtn');
   const settingsBtn      = document.getElementById('settingsBtn');
-  const micBtn           = document.getElementById('micBtn');
   const newChatBtn       = document.getElementById('newChatBtn');
   const expandToggleBtn  = document.getElementById('expandToggleBtn');
   const expandIcon       = document.getElementById('expandIcon');
@@ -51,6 +50,8 @@
       '.dot:nth-child(2) { animation-delay: 0.2s; }',
       '.dot:nth-child(3) { animation-delay: 0.4s; }',
       '@keyframes thinking { 0%, 80%, 100% { opacity: 0.4; } 40% { opacity: 1; } }',
+      '.streaming-cursor::after { content: "▎"; animation: blink 1s step-end infinite; opacity: 0.7; }',
+      '@keyframes blink { 50% { opacity: 0; } }',
     ].join('\n');
     document.head.appendChild(style);
   })();
@@ -67,7 +68,6 @@
     messageInput.placeholder = 'Ask follow-up';
     expandIcon.classList.remove('fa-chevron-down');
     expandIcon.classList.add('fa-chevron-up');
-    newChatBtn.style.display = '';
     if (electronAPI.resizeWidget) electronAPI.resizeWidget(true);
     scrollToBottom();
   }
@@ -79,7 +79,6 @@
     messageInput.placeholder = 'Ask anything about your screen';
     expandIcon.classList.remove('fa-chevron-up');
     expandIcon.classList.add('fa-chevron-down');
-    newChatBtn.style.display = 'none';
     if (electronAPI.resizeWidget) electronAPI.resizeWidget(false);
   }
 
@@ -358,7 +357,7 @@
    * Add a message to the chat.
    * @param {string} text
    * @param {string} type - 'user' | 'assistant' | 'transcription' | 'error' | 'system'
-   * @param {object} options - { thinking, screenshotBase64, skipPersist }
+   * @param {object} options - { thinking, screenshotBase64 }
    */
   function addMessage(text, type, options) {
     type = type || 'user';
@@ -377,17 +376,6 @@
     }
 
     scrollToBottom();
-
-    if (!options.skipPersist) {
-      chatHistory.push({
-        text: text,
-        type: type,
-        time: Date.now(),
-        thinking: options.thinking || null,
-        screenshot: !!options.screenshotBase64,
-      });
-      saveHistory();
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -416,83 +404,13 @@
     if (el) el.remove();
   }
 
-  // ---------------------------------------------------------------------------
-  // History persistence
-  // ---------------------------------------------------------------------------
-  var saveHistoryTimer = null;
-  function saveHistory() {
-    if (saveHistoryTimer) clearTimeout(saveHistoryTimer);
-    saveHistoryTimer = setTimeout(function() {
-      try {
-        localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory.slice(-500)));
-      } catch (_) {}
-    }, 1000); // Batch writes — save at most once per second
-  }
-
-  function loadHistory() {
-    try {
-      var raw = localStorage.getItem(CHAT_HISTORY_KEY);
-      if (!raw) return;
-      var items = JSON.parse(raw);
-      if (!Array.isArray(items)) return;
-      chatHistory = items;
-
-      // Batch render using DocumentFragment to avoid per-message reflows
-      var fragment = document.createDocumentFragment();
-      items.forEach(function (entry) {
-        var msgEl = createMessageElement(entry.text || '', entry.type || 'user', {
-          thinking: entry.thinking || null,
-          screenshot: entry.screenshot || false,
-        });
-        if (msgEl) fragment.appendChild(msgEl);
-      });
-      chatMessages.appendChild(fragment);
-
-      // Single scroll after all messages are added
-      scrollToBottom();
-
-      // Single Prism highlight pass for all code blocks
-      try {
-        if (typeof Prism !== 'undefined') Prism.highlightAllUnder(chatMessages);
-      } catch (_) {}
-
-      // Auto-expand if there's history
-      if (items.length > 0) {
-        expandWidget();
-      }
-    } catch (_) {}
-  }
-
   function clearChatHistory() {
-    try { localStorage.removeItem(CHAT_HISTORY_KEY); } catch (_) {}
-    chatHistory = [];
     chatMessages.innerHTML = '';
   }
 
   // ---------------------------------------------------------------------------
   // Listening / interim
   // ---------------------------------------------------------------------------
-  function showListeningAnimation() {
-    if (listeningArea) listeningArea.classList.add('active');
-    if (listeningIndicator) listeningIndicator.classList.add('active');
-    listeningStartTime = Date.now();
-    listeningTimer = setInterval(function () {
-      if (!listeningStartTime || !listeningDuration) return;
-      listeningDuration.textContent = Math.floor((Date.now() - listeningStartTime) / 1000) + 's';
-    }, 1000);
-  }
-
-  function hideListeningAnimation() {
-    if (listeningArea) listeningArea.classList.remove('active');
-    if (listeningIndicator) listeningIndicator.classList.remove('active');
-    if (listeningTimer) { clearInterval(listeningTimer); listeningTimer = null; }
-    listeningStartTime = null;
-    if (interimOverlay) {
-      interimOverlay.textContent = '';
-      interimOverlay.classList.remove('active');
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Popover management
   // ---------------------------------------------------------------------------
@@ -555,15 +473,6 @@
     if (electronAPI.showSettings) electronAPI.showSettings();
   });
 
-  micBtn.addEventListener('click', function () {
-    if (!speechAvailable) return;
-    if (isRecording) {
-      if (electronAPI.stopSpeechRecognition) electronAPI.stopSpeechRecognition();
-    } else {
-      if (electronAPI.startSpeechRecognition) electronAPI.startSpeechRecognition();
-    }
-  });
-
   newChatBtn.addEventListener('click', function () {
     clearChatHistory();
     if (electronAPI.clearSessionMemory) electronAPI.clearSessionMemory();
@@ -590,6 +499,53 @@
   });
 
   // ---------------------------------------------------------------------------
+  // Streaming helpers
+  // ---------------------------------------------------------------------------
+  function clearStreamState() {
+    activeStreamId = null;
+    streamTextBuffer = '';
+    streamThinkingBuffer = '';
+    streamMsgEl = null;
+    streamTextDiv = null;
+    streamThinkingSection = null;
+    if (streamRenderTimer) {
+      clearTimeout(streamRenderTimer);
+      streamRenderTimer = null;
+    }
+  }
+
+  function debouncedStreamRender() {
+    if (streamRenderTimer) clearTimeout(streamRenderTimer);
+    streamRenderTimer = setTimeout(function () {
+      if (streamTextDiv && streamTextBuffer) {
+        streamTextDiv.innerHTML = renderMarkdown(streamTextBuffer);
+        streamTextDiv.classList.add('streaming-cursor');
+        scrollToBottom();
+      }
+    }, 50);
+  }
+
+  function finalizeStream(response, thinking) {
+    if (streamRenderTimer) {
+      clearTimeout(streamRenderTimer);
+      streamRenderTimer = null;
+    }
+
+    // Mark this stream as completed so legacy listeners skip the duplicate
+    lastCompletedStreamId = activeStreamId;
+
+    // Replace the streaming element with a properly rendered message
+    if (streamMsgEl && chatMessages.contains(streamMsgEl)) {
+      chatMessages.removeChild(streamMsgEl);
+    }
+
+    // Add as a final, properly-rendered message (with copy buttons, Prism, etc.)
+    addMessage(response, 'assistant', { thinking: thinking });
+
+    clearStreamState();
+  }
+
+  // ---------------------------------------------------------------------------
   // IPC Listeners
   // ---------------------------------------------------------------------------
 
@@ -604,9 +560,94 @@
     });
   }
 
-  // LLM response for screenshot queries
+  // --- Streaming listeners ---
+
+  if (electronAPI.onLlmStreamStart) {
+    electronAPI.onLlmStreamStart(function (_event, data) {
+      hideThinkingIndicator();
+      expandWidget();
+
+      // Reset streaming state
+      clearStreamState();
+      activeStreamId = data.requestId;
+      streamTextBuffer = '';
+      streamThinkingBuffer = '';
+
+      // Create an in-progress message element
+      streamMsgEl = document.createElement('div');
+      streamMsgEl.className = 'message assistant';
+
+      var labelDiv = document.createElement('div');
+      labelDiv.className = 'message-label';
+      labelDiv.innerHTML = '<i class="fas fa-eye" style="font-size:10px;"></i> Viewed screen';
+      streamMsgEl.appendChild(labelDiv);
+
+      streamTextDiv = document.createElement('div');
+      streamTextDiv.className = 'message-text markdown-content streaming-cursor';
+      streamMsgEl.appendChild(streamTextDiv);
+
+      chatMessages.appendChild(streamMsgEl);
+      scrollToBottom();
+    });
+  }
+
+  if (electronAPI.onLlmStreamChunk) {
+    electronAPI.onLlmStreamChunk(function (_event, data) {
+      // Ignore chunks from stale streams
+      if (data.requestId !== activeStreamId) return;
+
+      if (data.type === 'thinking') {
+        streamThinkingBuffer += data.chunk;
+
+        // Create or update thinking section
+        if (!streamThinkingSection && streamMsgEl) {
+          streamThinkingSection = createThinkingSection(streamThinkingBuffer);
+          // Insert thinking before the text div
+          if (streamTextDiv) {
+            streamMsgEl.insertBefore(streamThinkingSection, streamTextDiv);
+          } else {
+            streamMsgEl.appendChild(streamThinkingSection);
+          }
+        } else if (streamThinkingSection) {
+          var contentEl = streamThinkingSection.querySelector('.thinking-content');
+          if (contentEl) contentEl.textContent = streamThinkingBuffer;
+        }
+        scrollToBottom();
+      } else if (data.type === 'text') {
+        streamTextBuffer += data.chunk;
+        debouncedStreamRender();
+      }
+    });
+  }
+
+  if (electronAPI.onLlmStreamEnd) {
+    electronAPI.onLlmStreamEnd(function (_event, data) {
+      if (data.requestId !== activeStreamId) return;
+      finalizeStream(data.response, data.thinking);
+    });
+  }
+
+  if (electronAPI.onLlmStreamError) {
+    electronAPI.onLlmStreamError(function (_event, data) {
+      if (data.requestId !== activeStreamId) return;
+
+      // Remove the partial streaming element
+      if (streamMsgEl && chatMessages.contains(streamMsgEl)) {
+        chatMessages.removeChild(streamMsgEl);
+      }
+      clearStreamState();
+
+      addMessage(data.error || 'Stream error', 'error');
+    });
+  }
+
+  // --- Legacy listeners (kept for backward compat, but skip if streaming is active) ---
+
+  // LLM response for screenshot queries (legacy non-streaming fallback)
   if (electronAPI.onDisplayLlmResponse) {
     electronAPI.onDisplayLlmResponse(function (_event, data) {
+      // Skip — streaming already rendered this response
+      if (activeStreamId || lastCompletedStreamId) return;
       hideThinkingIndicator();
       var response = data.content || data.response;
       if (response) {
@@ -615,20 +656,11 @@
     });
   }
 
-  // Voice transcription
-  if (electronAPI.onTranscriptionReceived) {
-    electronAPI.onTranscriptionReceived(function (_event, data) {
-      if (data && data.text && data.text.trim()) {
-        addMessage(data.text.trim(), 'transcription');
-        showThinkingIndicator();
-        expandWidget();
-      }
-    });
-  }
-
-  // LLM response to transcription
+  // LLM response to transcription (legacy non-streaming fallback)
   if (electronAPI.onTranscriptionLlmResponse) {
     electronAPI.onTranscriptionLlmResponse(function (_event, data) {
+      // Skip — streaming already rendered this response
+      if (activeStreamId || lastCompletedStreamId) return;
       if (data && data.response) {
         hideThinkingIndicator();
         addMessage(data.response, 'assistant', { thinking: data.thinking || null });
@@ -636,9 +668,11 @@
     });
   }
 
-  // Generic LLM response
+  // Generic LLM response (legacy non-streaming fallback)
   if (electronAPI.onLlmResponse) {
     electronAPI.onLlmResponse(function (_event, data) {
+      // Skip — streaming already rendered this response
+      if (activeStreamId || lastCompletedStreamId) return;
       if (data && data.response) {
         var h = hashString(data.response.trim());
         if (recentHashes.has(h)) return;
@@ -652,59 +686,10 @@
     });
   }
 
-  // Recording state
-  if (electronAPI.onRecordingStarted) {
-    electronAPI.onRecordingStarted(function () {
-      isRecording = true;
-      micBtn.classList.add('recording');
-      showListeningAnimation();
-    });
-  }
-
-  if (electronAPI.onRecordingStopped) {
-    electronAPI.onRecordingStopped(function () {
-      isRecording = false;
-      micBtn.classList.remove('recording');
-      hideListeningAnimation();
-    });
-  }
-
-  // Speech availability
-  if (electronAPI.onSpeechAvailability) {
-    electronAPI.onSpeechAvailability(function (_event, data) {
-      speechAvailable = !!(data && data.available);
-      micBtn.style.display = speechAvailable ? '' : 'none';
-    });
-  }
-
-  if (electronAPI.onSpeechStatus) {
-    electronAPI.onSpeechStatus(function (_event, data) {
-      if (data && typeof data.available === 'boolean') {
-        speechAvailable = data.available;
-        micBtn.style.display = speechAvailable ? '' : 'none';
-      }
-    });
-  }
-
-  if (electronAPI.onSpeechError) {
-    electronAPI.onSpeechError(function (_event, data) {
-      if (data && data.error) addMessage('Speech error: ' + data.error, 'error');
-    });
-  }
-
-  // Interim transcription
-  if (electronAPI.onInterimTranscription) {
-    electronAPI.onInterimTranscription(function (_event, data) {
-      if (data && data.text && interimOverlay) {
-        interimOverlay.textContent = data.text;
-        interimOverlay.classList.add('active');
-      }
-    });
-  }
-
   // Session cleared
   if (electronAPI.onSessionCleared) {
     electronAPI.onSessionCleared(function () {
+      clearStreamState();
       clearChatHistory();
     });
   }
@@ -728,23 +713,9 @@
   if (electronAPI.onLlmError) {
     electronAPI.onLlmError(function (_event, data) {
       hideThinkingIndicator();
+      clearStreamState();
       if (data && data.error) addMessage(data.error, 'error');
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Init
-  // ---------------------------------------------------------------------------
-  loadHistory();
-
-  if (electronAPI.getSpeechAvailability) {
-    electronAPI.getSpeechAvailability().then(function (avail) {
-      speechAvailable = !!avail;
-      micBtn.style.display = speechAvailable ? '' : 'none';
-    }).catch(function () {
-      micBtn.style.display = 'none';
-    });
-  } else {
-    micBtn.style.display = 'none';
-  }
 })();

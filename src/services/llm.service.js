@@ -69,7 +69,7 @@ class LLMService {
   }
 
   getGenerationConfig(overrides = {}) {
-    const defaults = config.get('llm.claude.generation') || config.get('llm.gemini.generation') || {};
+    const defaults = config.get('llm.claude.generation') || {};
     const fallback = {
       temperature: 0.7,
       maxOutputTokens: 16384
@@ -167,7 +167,7 @@ class LLMService {
         activeSkill,
         requestId: this.requestCount
       });
-      if (config.get('llm.claude.fallbackEnabled') || config.get('llm.gemini.fallbackEnabled')) {
+      if (config.get('llm.claude.fallbackEnabled')) {
         return this.generateFallbackResponse('[image]', activeSkill);
       }
       throw error;
@@ -225,7 +225,7 @@ class LLMService {
     } catch (error) {
       this.errorCount++;
       logger.error('LLM processing failed', { error: error.message, activeSkill });
-      if (config.get('llm.claude.fallbackEnabled') || config.get('llm.gemini.fallbackEnabled')) {
+      if (config.get('llm.claude.fallbackEnabled')) {
         return this.generateFallbackResponse(text, activeSkill);
       }
       throw error;
@@ -306,7 +306,7 @@ class LLMService {
     } catch (error) {
       this.errorCount++;
       logger.error('LLM transcription processing failed', { error: error.message, activeSkill });
-      if (config.get('llm.claude.fallbackEnabled') || config.get('llm.gemini.fallbackEnabled')) {
+      if (config.get('llm.claude.fallbackEnabled')) {
         return this.generateIntelligentFallbackResponse(text, activeSkill);
       }
       throw error;
@@ -383,8 +383,8 @@ class LLMService {
    * Make a request to the Claude/Anthropic-compatible API.
    */
   async _makeClaudeRequest(requestBody) {
-    const maxRetries = config.get('llm.claude.maxRetries') || config.get('llm.gemini.maxRetries') || 3;
-    const timeout = config.get('llm.claude.timeout') || config.get('llm.gemini.timeout') || 60000;
+    const maxRetries = config.get('llm.claude.maxRetries') || 3;
+    const timeout = config.get('llm.claude.timeout') || 60000;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -522,6 +522,404 @@ class LLMService {
         const delay = baseDelay * attempt + Math.random() * 1000;
         await this.delay(delay);
       }
+    }
+  }
+
+  /**
+   * Make a streaming request to the Claude/Anthropic-compatible API.
+   * Parses SSE events and calls callbacks for each delta.
+   * Returns the same { text, thinking } shape as _makeClaudeRequest when done.
+   *
+   * @param {object} requestBody - Same shape as _makeClaudeRequest
+   * @param {object} callbacks - { onStart, onText, onThinking, onEnd, onError }
+   * @returns {Promise<{text: string, thinking: string|null}>}
+   */
+  async _makeClaudeStreamingRequest(requestBody, callbacks = {}) {
+    const timeout = config.get('llm.claude.timeout') || 60000;
+
+    const body = {
+      model: this.modelName,
+      max_tokens: requestBody.max_tokens || 16384,
+      messages: requestBody.messages,
+      stream: true
+    };
+
+    if (requestBody.temperature !== undefined) {
+      body.temperature = requestBody.temperature;
+    }
+    if (requestBody.system) {
+      body.system = requestBody.system;
+    }
+
+    if (requestBody.thinking) {
+      body.thinking = {
+        type: "enabled",
+        budget_tokens: requestBody.thinking_budget || 10000
+      };
+      // Claude requires temperature=1 or omitted when thinking is enabled
+      delete body.temperature;
+    }
+
+    const postData = JSON.stringify(body);
+    const parsedUrl = new URL(`${this.baseUrl}/v1/messages`);
+    const isHttps = parsedUrl.protocol === 'https:';
+    const transport = isHttps ? https : http;
+
+    const httpAgent = new (isHttps ? https : http).Agent({ keepAlive: true, maxSockets: 2 });
+
+    const options = {
+      method: 'POST',
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? 443 : 80),
+      path: parsedUrl.pathname,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout,
+      agent: httpAgent
+    };
+
+    logger.debug('Claude streaming API request', {
+      model: this.modelName,
+      baseUrl: this.baseUrl,
+      messageCount: requestBody.messages.length,
+      hasSystem: !!requestBody.system
+    });
+
+    return new Promise((resolve, reject) => {
+      let textAccumulator = '';
+      let thinkingAccumulator = '';
+      let sseBuffer = '';
+      let streamStarted = false;
+      let currentBlockType = null; // 'text' or 'thinking'
+
+      const req = transport.request(options, (res) => {
+        if (res.statusCode !== 200) {
+          let errData = '';
+          res.on('data', chunk => { errData += chunk; });
+          res.on('end', () => {
+            try {
+              const errBody = JSON.parse(errData).error || {};
+              reject(new Error(`HTTP ${res.statusCode}: ${errBody.message || errData.substring(0, 200)}`));
+            } catch (_) {
+              reject(new Error(`HTTP ${res.statusCode}: ${errData.substring(0, 200)}`));
+            }
+          });
+          return;
+        }
+
+        res.on('data', (chunk) => {
+          sseBuffer += chunk.toString();
+
+          // Process complete SSE lines
+          const lines = sseBuffer.split('\n');
+          // Keep the last incomplete line in the buffer
+          sseBuffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(':')) continue; // skip empty lines and comments
+
+            if (trimmed.startsWith('data: ')) {
+              const jsonStr = trimmed.slice(6);
+              if (jsonStr === '[DONE]') continue;
+
+              try {
+                const event = JSON.parse(jsonStr);
+                this._handleStreamEvent(event, {
+                  onStart: () => {
+                    streamStarted = true;
+                    if (callbacks.onStart) callbacks.onStart();
+                  },
+                  onBlockStart: (type) => {
+                    currentBlockType = type;
+                  },
+                  onTextDelta: (delta) => {
+                    textAccumulator += delta;
+                    if (callbacks.onText) callbacks.onText(delta);
+                  },
+                  onThinkingDelta: (delta) => {
+                    thinkingAccumulator += delta;
+                    if (callbacks.onThinking) callbacks.onThinking(delta);
+                  },
+                  onBlockStop: () => {
+                    currentBlockType = null;
+                  }
+                });
+              } catch (parseErr) {
+                logger.debug('SSE parse skip', { line: trimmed.substring(0, 100) });
+              }
+            }
+          }
+        });
+
+        res.on('end', () => {
+          // Process any remaining buffer
+          if (sseBuffer.trim().startsWith('data: ')) {
+            try {
+              const event = JSON.parse(sseBuffer.trim().slice(6));
+              this._handleStreamEvent(event, {
+                onTextDelta: (d) => { textAccumulator += d; if (callbacks.onText) callbacks.onText(d); },
+                onThinkingDelta: (d) => { thinkingAccumulator += d; if (callbacks.onThinking) callbacks.onThinking(d); }
+              });
+            } catch (_) {}
+          }
+
+          const result = {
+            text: textAccumulator,
+            thinking: thinkingAccumulator || null
+          };
+
+          logger.debug('Claude streaming request completed', {
+            responseLength: textAccumulator.length,
+            hasThinking: !!thinkingAccumulator
+          });
+
+          if (callbacks.onEnd) callbacks.onEnd(result);
+          resolve(result);
+        });
+
+        res.on('error', (error) => {
+          const err = new Error(`Stream read error: ${error.message}`);
+          if (callbacks.onError) callbacks.onError(err);
+          reject(err);
+        });
+      });
+
+      req.on('error', (error) => {
+        const err = new Error(`Claude streaming request failed: ${error.message}`);
+        if (streamStarted && callbacks.onError) {
+          callbacks.onError(err);
+        }
+        reject(err);
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        const err = new Error('Claude streaming request timeout');
+        if (streamStarted && callbacks.onError) {
+          callbacks.onError(err);
+        }
+        reject(err);
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  /**
+   * Handle a single SSE event from the Claude streaming API.
+   */
+  _handleStreamEvent(event, handlers) {
+    switch (event.type) {
+      case 'message_start':
+        if (handlers.onStart) handlers.onStart();
+        break;
+
+      case 'content_block_start':
+        if (event.content_block) {
+          const blockType = event.content_block.type; // 'text' or 'thinking'
+          if (handlers.onBlockStart) handlers.onBlockStart(blockType);
+        }
+        break;
+
+      case 'content_block_delta':
+        if (event.delta) {
+          if (event.delta.type === 'text_delta' && event.delta.text) {
+            if (handlers.onTextDelta) handlers.onTextDelta(event.delta.text);
+          } else if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
+            if (handlers.onThinkingDelta) handlers.onThinkingDelta(event.delta.thinking);
+          }
+        }
+        break;
+
+      case 'content_block_stop':
+        if (handlers.onBlockStop) handlers.onBlockStop();
+        break;
+
+      case 'message_delta':
+        // Contains stop_reason, usage info
+        break;
+
+      case 'message_stop':
+        // Stream complete — handled by res.on('end')
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Streaming variant of processImageWithSkill.
+   * Calls callbacks during streaming, returns full result when done.
+   */
+  async processImageWithSkillStreaming(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, callbacks = {}) {
+    if (!this.isInitialized) {
+      throw new Error('LLM service not initialized. Check API key configuration.');
+    }
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
+      throw new Error('Invalid image buffer provided');
+    }
+
+    const startTime = Date.now();
+    this.requestCount++;
+
+    try {
+      const base64 = imageBuffer.toString('base64');
+      const mediaType = this._normalizeMediaType(mimeType);
+
+      const messages = [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: mediaType, data: base64 }
+            },
+            {
+              type: 'text',
+              text: this.formatImageInstruction(activeSkill, programmingLanguage)
+            }
+          ]
+        }
+      ];
+
+      const genConfig = this.getGenerationConfig();
+      const request = {
+        system: this._buildSystemPrompt(),
+        messages,
+        max_tokens: genConfig.maxOutputTokens,
+        temperature: genConfig.temperature
+      };
+
+      const thinkingEnabled = config.get('llm.extendedThinking') || false;
+      if (thinkingEnabled) {
+        request.thinking = true;
+        request.thinking_budget = config.get('llm.thinkingBudget') || 10000;
+      }
+
+      const result = await this._makeClaudeStreamingRequest(request, callbacks);
+      const responseText = result.text;
+      const thinkingText = result.thinking;
+
+      const finalResponse = programmingLanguage
+        ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
+        : responseText;
+
+      logger.logPerformance('LLM streaming image processing', startTime, {
+        activeSkill,
+        imageSize: imageBuffer.length,
+        responseLength: finalResponse.length,
+        requestId: this.requestCount
+      });
+
+      return {
+        response: finalResponse,
+        thinking: thinkingText,
+        metadata: {
+          skill: activeSkill,
+          programmingLanguage,
+          processingTime: Date.now() - startTime,
+          requestId: this.requestCount,
+          usedFallback: false,
+          isImageAnalysis: true,
+          mimeType
+        }
+      };
+    } catch (error) {
+      this.errorCount++;
+      logger.error('LLM streaming image processing failed', { error: error.message, activeSkill });
+      if (config.get('llm.claude.fallbackEnabled')) {
+        return this.generateFallbackResponse('[image]', activeSkill);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Streaming variant of processTranscriptionWithIntelligentResponse.
+   * Used for typed chat messages and voice transcriptions.
+   */
+  async processTranscriptionStreaming(text, activeSkill, sessionMemory = [], programmingLanguage = null, callbacks = {}) {
+    if (!this.isInitialized) {
+      throw new Error('LLM service not initialized. Check API key configuration.');
+    }
+
+    const cleanText = text && typeof text === 'string' ? text.trim() : '';
+    if (!cleanText) {
+      throw new Error('Empty or invalid transcription text');
+    }
+
+    const startTime = Date.now();
+    this.requestCount++;
+
+    try {
+      const systemPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
+
+      // Build conversation history
+      const sessionManager = require('../managers/session.manager');
+      let messages = [];
+
+      if (sessionManager && typeof sessionManager.getConversationHistory === 'function') {
+        const history = sessionManager.getConversationHistory(10);
+        messages = history
+          .filter(e => e.role !== 'system' && e.content && e.content.trim().length > 0)
+          .slice(-8)
+          .map(e => ({
+            role: e.role === 'model' ? 'assistant' : 'user',
+            content: e.content.trim()
+          }));
+      }
+
+      messages.push({ role: 'user', content: cleanText });
+      messages = this._fixMessageAlternation(messages);
+
+      const genConfig = this.getGenerationConfig();
+      const request = {
+        system: this._buildSystemPrompt(),
+        messages,
+        max_tokens: genConfig.maxOutputTokens,
+        temperature: genConfig.temperature
+      };
+
+      const thinkingEnabled = config.get('llm.extendedThinking') || false;
+      if (thinkingEnabled) {
+        request.thinking = true;
+        request.thinking_budget = config.get('llm.thinkingBudget') || 10000;
+      }
+
+      const result = await this._makeClaudeStreamingRequest(request, callbacks);
+      const responseText = result.text;
+      const thinkingText = result.thinking;
+
+      const finalResponse = programmingLanguage
+        ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
+        : responseText;
+
+      return {
+        response: finalResponse,
+        thinking: thinkingText,
+        metadata: {
+          skill: activeSkill,
+          programmingLanguage,
+          processingTime: Date.now() - startTime,
+          requestId: this.requestCount,
+          usedFallback: false,
+          isTranscriptionResponse: true
+        }
+      };
+    } catch (error) {
+      this.errorCount++;
+      logger.error('LLM streaming transcription failed', { error: error.message, activeSkill });
+      if (config.get('llm.claude.fallbackEnabled')) {
+        return this.generateIntelligentFallbackResponse(text, activeSkill);
+      }
+      throw error;
     }
   }
 

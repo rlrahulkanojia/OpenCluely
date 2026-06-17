@@ -39,24 +39,6 @@
     <!-- Messages Area (middle, hidden when collapsed) -->
     <div class="widget-messages" id="chatMessages"></div>
 
-    <!-- Listening Indicator -->
-    <div class="widget-listening" id="listeningArea">
-      <div class="listening-indicator" id="listeningIndicator">
-        <div style="display:flex;align-items:center;gap:2px;">
-          <div class="wave-bar"></div>
-          <div class="wave-bar"></div>
-          <div class="wave-bar"></div>
-          <div class="wave-bar"></div>
-          <div class="wave-bar"></div>
-        </div>
-        <span class="listening-text">Listening</span>
-        <span class="listening-duration" id="listeningDuration">0s</span>
-      </div>
-    </div>
-
-    <!-- Interim Transcription Overlay -->
-    <div class="widget-interim-overlay" id="interimOverlay"></div>
-
     <!-- Toolbar (bottom, darker glass) -->
     <div class="widget-toolbar">
       <button class="toolbar-btn" id="stealthBtn" title="Toggle click-through">
@@ -73,10 +55,6 @@
         <i class="fas fa-cog"></i>
       </button>
 
-      <button class="toolbar-btn" id="micBtn" title="Voice input (Alt+R)">
-        <i class="fas fa-microphone"></i>
-      </button>
-
       <div class="toolbar-spacer"></div>
 
       <button class="toolbar-text-btn" id="newChatBtn" title="New chat">
@@ -85,7 +63,6 @@
       </button>
 
       <button class="toolbar-text-btn" id="expandToggleBtn" title="Expand">
-        History
         <i class="fas fa-chevron-up" id="expandIcon"></i>
       </button>
     </div>

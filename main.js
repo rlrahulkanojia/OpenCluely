@@ -14,7 +14,6 @@ app.commandLine.appendSwitch("no-pings");
 // Services
 // Screen capture (image-based)
 const captureService = require("./src/services/capture.service");
-const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
 
 // Managers
@@ -27,7 +26,7 @@ class ApplicationController {
     this.activeSkill = "dsa";
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "python";
-    this.speechAvailable = false;
+    this.streamRequestId = 0;
 
     // Window configurations for reference
     this.windowConfigs = {
@@ -164,7 +163,7 @@ class ApplicationController {
   setupPermissions() {
     session.defaultSession.setPermissionRequestHandler(
       (webContents, permission, callback) => {
-        const allowedPermissions = ["microphone", "camera", "display-capture"];
+        const allowedPermissions = ["camera", "display-capture"];
         const granted = allowedPermissions.includes(permission);
 
         logger.debug("Permission request", { permission, granted });
@@ -182,7 +181,6 @@ class ApplicationController {
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+,": () => windowManager.showSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
-      "Alt+R": () => this.toggleSpeechRecognition(),
       "CommandOrControl+Up": () => this.handleUpArrow(),
       "CommandOrControl+Down": () => this.handleDownArrow(),
       "CommandOrControl+Left": () => this.handleLeftArrow(),
@@ -196,66 +194,7 @@ class ApplicationController {
   }
 
   setupServiceEventHandlers() {
-    speechService.on("recording-started", () => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("recording-started");
-      });
-    });
-
-    speechService.on("recording-stopped", () => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("recording-stopped");
-      });
-    });
-
-    speechService.on("transcription", (text) => {      
-      // Add transcription to session memory
-      sessionManager.addUserInput(text, 'speech');
-      
-      const windows = BrowserWindow.getAllWindows();
-      
-      windows.forEach((window) => {
-        window.webContents.send("transcription-received", { text });
-      });
-      
-      // Automatically process transcription with LLM for intelligent response
-      setTimeout(async () => {
-        try {
-          const sessionHistory = sessionManager.getOptimizedHistory();
-          await this.processTranscriptionWithLLM(text, sessionHistory);
-        } catch (error) {
-          logger.error("Failed to process transcription with LLM", {
-            error: error.message,
-            text: text.substring(0, 100)
-          });
-        }
-      }, 500);
-    });
-
-    speechService.on("interim-transcription", (text) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("interim-transcription", { text });
-      });
-    });
-
-    speechService.on("status", (status) => {
-      this.speechAvailable = speechService.isAvailable ? speechService.isAvailable() : false;
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("speech-status", { status, available: this.speechAvailable });
-      });
-      // Also broadcast availability specifically
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("speech-availability", { available: this.speechAvailable });
-      });
-    });
-
-    speechService.on("error", (error) => {
-      // In error, still compute availability
-      this.speechAvailable = speechService.isAvailable ? speechService.isAvailable() : false;
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("speech-error", { error, available: this.speechAvailable });
-      });
-    });
+    // No external service event handlers needed at this time
   }
 
   setupIPCHandlers() {
@@ -280,29 +219,6 @@ class ApplicationController {
       }
     });
     
-    ipcMain.handle("get-speech-availability", () => {
-      return speechService.isAvailable ? speechService.isAvailable() : false;
-    });
-
-    ipcMain.handle("start-speech-recognition", () => {
-      speechService.startRecording();
-      return speechService.getStatus();
-    });
-
-    ipcMain.handle("stop-speech-recognition", () => {
-      speechService.stopRecording();
-      return speechService.getStatus();
-    });
-
-    // Also handle direct send events for fallback
-    ipcMain.on("start-speech-recognition", () => {
-      speechService.startRecording();
-    });
-
-    ipcMain.on("stop-speech-recognition", () => {
-      speechService.stopRecording();
-    });
-
     ipcMain.handle("show-all-windows", () => {
       windowManager.showAllWindows();
       return windowManager.getWindowStats();
@@ -441,46 +357,8 @@ class ApplicationController {
       }
     });
 
-    ipcMain.handle("set-gemini-api-key", (event, apiKey) => {
-      // Now updates the Claude/Anthropic API key
-      llmService.updateApiKey(apiKey);
-      return llmService.getStats();
-    });
-
-    ipcMain.handle("get-gemini-status", () => {
-      // Returns stats for whatever LLM backend is active (Claude or Gemini)
-      return llmService.getStats();
-    });
-
     ipcMain.handle("get-window-stats", () => {
       return windowManager.getWindowStats();
-    });
-
-    ipcMain.handle("test-gemini-connection", async () => {
-      // Now tests the active LLM backend (Claude or Gemini)
-      return await llmService.testConnection();
-    });
-
-    ipcMain.handle("run-gemini-diagnostics", async () => {
-      // Now runs diagnostics for the active LLM backend
-      try {
-        const connectivity = await llmService.checkNetworkConnectivity();
-        const apiTest = await llmService.testConnection();
-
-        return {
-          success: true,
-          connectivity,
-          apiTest,
-          llmStats: llmService.getStats(),
-          timestamp: new Date().toISOString()
-        };
-      } catch (error) {
-        return {
-          success: false,
-          error: error.message,
-          timestamp: new Date().toISOString()
-        };
-      }
     });
 
     // Settings handlers
@@ -598,34 +476,6 @@ class ApplicationController {
         process.exit(1);
       }
     });
-  }
-
-  toggleSpeechRecognition() {
-    const isAvailable = typeof speechService.isAvailable === 'function' ? speechService.isAvailable() : !!speechService.getStatus?.().isInitialized;
-    if (!isAvailable) {
-      logger.warn("Speech recognition unavailable; toggle ignored");
-      try {
-        windowManager.broadcastToAllWindows("speech-status", { status: 'Speech recognition unavailable', available: false });
-        windowManager.broadcastToAllWindows("speech-availability", { available: false });
-      } catch (e) {}
-      return;
-    }
-    const currentStatus = speechService.getStatus();
-    if (currentStatus.isRecording) {
-      try {
-        speechService.stopRecording();
-        logger.info("Speech recognition stopped via global shortcut");
-      } catch (error) {
-        logger.error("Error stopping speech recognition:", error);
-      }
-    } else {
-      try {
-        speechService.startRecording();
-        logger.info("Speech recognition started via global shortcut");
-      } catch (error) {
-        logger.error("Error starting speech recognition:", error);
-      }
-    }
   }
 
   clearSessionMemory() {
@@ -754,17 +604,47 @@ class ApplicationController {
         });
       }
 
-      // Process with LLM
+      // Process with LLM (streaming)
       const sessionHistory = sessionManager.getOptimizedHistory();
       const skillsRequiringProgrammingLanguage = ['dsa'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
-      const llmResult = await llmService.processImageWithSkill(
+      const requestId = ++this.streamRequestId;
+
+      // Send stream start
+      windowManager.broadcastToAllWindows("llm-stream-start", { requestId });
+
+      const llmResult = await llmService.processImageWithSkillStreaming(
         capture.imageBuffer,
         capture.mimeType || 'image/png',
         this.activeSkill,
         sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null
+        needsProgrammingLanguage ? this.codingLanguage : null,
+        {
+          onStart: () => {
+            logger.debug("Screenshot stream started", { requestId });
+          },
+          onText: (delta) => {
+            windowManager.broadcastToAllWindows("llm-stream-chunk", {
+              requestId,
+              type: 'text',
+              chunk: delta
+            });
+          },
+          onThinking: (delta) => {
+            windowManager.broadcastToAllWindows("llm-stream-chunk", {
+              requestId,
+              type: 'thinking',
+              chunk: delta
+            });
+          },
+          onError: (err) => {
+            windowManager.broadcastToAllWindows("llm-stream-error", {
+              requestId,
+              error: err.message
+            });
+          }
+        }
       );
 
       // Record in session
@@ -775,17 +655,13 @@ class ApplicationController {
         isImageAnalysis: true
       });
 
-      // Send response to main widget
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('display-llm-response', {
-          content: llmResult.response,
-          thinking: llmResult.thinking || null,
-          metadata: llmResult.metadata,
-          timestamp: new Date().toISOString()
-        });
-      }
+      // Send stream end
+      windowManager.broadcastToAllWindows("llm-stream-end", {
+        requestId,
+        response: llmResult.response,
+        thinking: llmResult.thinking || null
+      });
 
-      this.broadcastLLMSuccess(llmResult);
     } catch (error) {
       logger.error("Screenshot OCR failed", { error: error.message, duration: Date.now() - startTime });
       windowManager.showAllWindows();
@@ -874,21 +750,51 @@ class ApplicationController {
         return;
       }
 
-      logger.info("Processing transcription with intelligent LLM response", {
+      const requestId = ++this.streamRequestId;
+
+      logger.info("Processing transcription with streaming LLM response", {
         skill: this.activeSkill,
         textLength: cleanText.length,
-        textPreview: cleanText.substring(0, 100) + "..."
+        requestId
       });
 
       // Check if current skill needs programming language context
       const skillsRequiringProgrammingLanguage = ['dsa'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
-      const llmResult = await llmService.processTranscriptionWithIntelligentResponse(
+      // Send stream start
+      windowManager.broadcastToAllWindows("llm-stream-start", { requestId });
+
+      const llmResult = await llmService.processTranscriptionStreaming(
         cleanText,
         this.activeSkill,
         sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null
+        needsProgrammingLanguage ? this.codingLanguage : null,
+        {
+          onStart: () => {
+            logger.debug("Stream started", { requestId });
+          },
+          onText: (delta) => {
+            windowManager.broadcastToAllWindows("llm-stream-chunk", {
+              requestId,
+              type: 'text',
+              chunk: delta
+            });
+          },
+          onThinking: (delta) => {
+            windowManager.broadcastToAllWindows("llm-stream-chunk", {
+              requestId,
+              type: 'thinking',
+              chunk: delta
+            });
+          },
+          onError: (err) => {
+            windowManager.broadcastToAllWindows("llm-stream-error", {
+              requestId,
+              error: err.message
+            });
+          }
+        }
       );
 
       // Add LLM response to session memory
@@ -899,14 +805,17 @@ class ApplicationController {
         isTranscriptionResponse: true
       });
 
-      // Send response to chat windows
-      this.broadcastTranscriptionLLMResponse(llmResult);
+      // Send stream end with full response
+      windowManager.broadcastToAllWindows("llm-stream-end", {
+        requestId,
+        response: llmResult.response,
+        thinking: llmResult.thinking || null
+      });
 
-      logger.info("Transcription LLM response completed", {
+      logger.info("Streaming transcription LLM response completed", {
         responseLength: llmResult.response.length,
         skill: this.activeSkill,
-        programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
-        processingTime: llmResult.metadata.processingTime
+        requestId
       });
 
     } catch (error) {
@@ -917,10 +826,16 @@ class ApplicationController {
         text: text ? text.substring(0, 100) : 'undefined'
       });
 
+      // Broadcast error
+      windowManager.broadcastToAllWindows("llm-stream-error", {
+        requestId: this.streamRequestId,
+        error: error.message
+      });
+
       // Try to provide a fallback response
       try {
         const fallbackResult = llmService.generateIntelligentFallbackResponse(text, this.activeSkill);
-        
+
         sessionManager.addModelResponse(fallbackResult.response, {
           skill: this.activeSkill,
           processingTime: fallbackResult.metadata.processingTime,
@@ -930,26 +845,13 @@ class ApplicationController {
         });
 
         this.broadcastTranscriptionLLMResponse(fallbackResult);
-        
-        logger.info("Used fallback response for transcription", {
-          skill: this.activeSkill,
-          fallbackResponse: fallbackResult.response
-        });
-        
+
       } catch (fallbackError) {
         logger.error("Fallback response also failed", {
           fallbackError: fallbackError.message
         });
 
-        sessionManager.addConversationEvent({
-          role: 'system',
-          content: `Transcription LLM processing failed: ${error.message}`,
-          action: 'transcription_llm_error',
-          metadata: {
-            error: error.message,
-            skill: this.activeSkill
-          }
-        });
+        this.broadcastLLMError(error.message);
       }
     }
   }
@@ -1035,14 +937,11 @@ class ApplicationController {
 
   getSettings() {
     return {
-      codingLanguage: this.codingLanguage || "cpp", // Default to C++
+      codingLanguage: this.codingLanguage || "cpp",
       activeSkill: this.activeSkill || "dsa",
       appIcon: this.appIcon || "terminal",
       selectedIcon: this.appIcon || "terminal",
       extendedThinking: config.get('llm.extendedThinking') || false,
-      // pass through env-derived settings for UI convenience (masked)
-      azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
-      speechAvailable: this.speechAvailable
     };
   }
   

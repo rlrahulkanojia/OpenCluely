@@ -6,11 +6,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Screenshot and OCR
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
   
-  // Speech recognition
-  startSpeechRecognition: () => ipcRenderer.invoke('start-speech-recognition'),
-  stopSpeechRecognition: () => ipcRenderer.invoke('stop-speech-recognition'),
-  getSpeechAvailability: () => ipcRenderer.invoke('get-speech-availability'),
-  
   // Window management
   showAllWindows: () => ipcRenderer.invoke('show-all-windows'),
   hideAllWindows: () => ipcRenderer.invoke('hide-all-windows'),
@@ -30,11 +25,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   formatSessionHistory: () => ipcRenderer.invoke('format-session-history'),
   sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
-  
-  // Gemini LLM configuration
-  setGeminiApiKey: (apiKey) => ipcRenderer.invoke('set-gemini-api-key', apiKey),
-  getGeminiStatus: () => ipcRenderer.invoke('get-gemini-status'),
-  testGeminiConnection: () => ipcRenderer.invoke('test-gemini-connection'),
   
   // Settings
   showSettings: () => ipcRenderer.invoke('show-settings'),
@@ -77,11 +67,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureArea: (options) => ipcRenderer.invoke('capture-area', options),
   
   // Event listeners
-  onTranscriptionReceived: (callback) => ipcRenderer.on('transcription-received', callback),
-  onInterimTranscription: (callback) => ipcRenderer.on('interim-transcription', callback),
-  onSpeechStatus: (callback) => ipcRenderer.on('speech-status', callback),
-  onSpeechError: (callback) => ipcRenderer.on('speech-error', callback),
-  onSpeechAvailability: (callback) => ipcRenderer.on('speech-availability', callback),
   onSessionEvent: (callback) => ipcRenderer.on('session-event', callback),
   onSessionCleared: (callback) => ipcRenderer.on('session-cleared', callback),
   onOcrCompleted: (callback) => ipcRenderer.on('ocr-completed', callback),
@@ -89,13 +74,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLlmResponse: (callback) => ipcRenderer.on('llm-response', callback),
   onLlmError: (callback) => ipcRenderer.on('llm-error', callback),
   onTranscriptionLlmResponse: (callback) => ipcRenderer.on('transcription-llm-response', callback),
-  onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
   onDisplayLlmResponse: (callback) => ipcRenderer.on('display-llm-response', callback),
+
+  // LLM Streaming
+  onLlmStreamStart: (callback) => ipcRenderer.on('llm-stream-start', callback),
+  onLlmStreamChunk: (callback) => ipcRenderer.on('llm-stream-chunk', callback),
+  onLlmStreamEnd: (callback) => ipcRenderer.on('llm-stream-end', callback),
+  onLlmStreamError: (callback) => ipcRenderer.on('llm-stream-error', callback),
   onShowLoading: (callback) => ipcRenderer.on('show-loading', callback),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
   onInteractionModeChanged: (callback) => ipcRenderer.on('interaction-mode-changed', callback),
-  onRecordingStarted: (callback) => ipcRenderer.on('recording-started', callback),
-  onRecordingStopped: (callback) => ipcRenderer.on('recording-stopped', callback),
   onCodingLanguageChanged: (callback) => ipcRenderer.on('coding-language-changed', callback),
   onScreenshotData: (callback) => ipcRenderer.on('screenshot-data', callback),
   onThinkingEnabledChanged: (callback) => ipcRenderer.on('thinking-enabled-changed', callback),
@@ -114,7 +102,6 @@ contextBridge.exposeInMainWorld('api', {
             'close-settings',
             'quit-app',
             'save-settings',
-            'toggle-recording',
             'toggle-interaction-mode',
             'update-skill',
             'window-loaded',
@@ -129,12 +116,9 @@ contextBridge.exposeInMainWorld('api', {
     receive: (channel, func) => {
         let validChannels = [
             'load-settings',
-            'recording-state-changed',
             'interaction-mode-changed',
             'skill-updated',
-            'update-skill',
-            'recording-started',
-            'recording-stopped'
+            'update-skill'
         ];
         if (validChannels.includes(channel)) {
             ipcRenderer.on(channel, (event, ...args) => func(...args));

@@ -12,8 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ===============================================================
     const LABELS = {
         codingLanguage: { cpp: 'C++', c: 'C', python: 'Python', java: 'Java', javascript: 'JavaScript' },
-        activeSkill:    { dsa: 'DSA', programming: 'Programming' },
-        speechProvider: { azure: 'Azure', whisper: 'Local Whisper' }
+        activeSkill:    { dsa: 'DSA', programming: 'Programming' }
     };
 
     // ===============================================================
@@ -123,11 +122,6 @@ document.addEventListener('DOMContentLoaded', () => {
         saveAllSettings();
     });
 
-    setupDropdown('speechProviderTrigger', 'speechProviderPopover', 'speechProvider', (val) => {
-        updateSpeechFieldVisibility(val);
-        saveAllSettings();
-    });
-
     // ===============================================================
     //  3. Extended thinking toggle
     // ===============================================================
@@ -144,18 +138,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ===============================================================
-    //  4. Speech provider dynamic field visibility
-    // ===============================================================
-    const azureFields = document.getElementById('azureFields');
-    const whisperFields = document.getElementById('whisperFields');
-
-    const updateSpeechFieldVisibility = (provider) => {
-        if (azureFields) azureFields.classList.toggle('hidden', provider !== 'azure');
-        if (whisperFields) whisperFields.classList.toggle('hidden', provider !== 'whisper');
-    };
-
-    // ===============================================================
-    //  5. Settings load
+    //  4. Settings load
     // ===============================================================
     const loadSettingsIntoUI = (settings) => {
         if (!settings) return;
@@ -164,7 +147,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // Dropdowns
         setDropdownValue('codingLanguageTrigger', 'codingLanguagePopover', 'codingLanguage', settings.codingLanguage || 'cpp');
         setDropdownValue('activeSkillTrigger', 'activeSkillPopover', 'activeSkill', settings.activeSkill || 'dsa');
-        setDropdownValue('speechProviderTrigger', 'speechProviderPopover', 'speechProvider', settings.speechProvider || 'azure');
 
         // Extended thinking toggle
         if (thinkingToggle) {
@@ -173,23 +155,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Text inputs
         const fields = {
-            geminiKey:       settings.geminiKey,
-            azureKey:        settings.azureKey,
-            azureRegion:     settings.azureRegion,
-            whisperCommand:  settings.whisperCommand,
-            whisperModel:    settings.whisperModel,
-            whisperLanguage: settings.whisperLanguage,
-            whisperSegmentMs: settings.whisperSegmentMs,
-            windowGap:       settings.windowGap
+            windowGap: settings.windowGap
         };
 
         Object.entries(fields).forEach(([id, val]) => {
             const el = document.getElementById(id);
             if (el && val != null) el.value = val;
         });
-
-        // Speech provider visibility
-        updateSpeechFieldVisibility(settings.speechProvider || 'azure');
 
         // Icon selection
         const selectedIcon = settings.selectedIcon || settings.appIcon;
@@ -247,14 +219,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const skill = readDropdown('activeSkillPopover');
         if (skill) settings.activeSkill = skill;
 
-        const provider = readDropdown('speechProviderPopover');
-        if (provider) settings.speechProvider = provider;
-
         // Extended thinking
         if (thinkingToggle) settings.extendedThinking = thinkingToggle.classList.contains('active');
 
         // Text/number inputs
-        const inputIds = ['geminiKey', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModel', 'whisperLanguage', 'whisperSegmentMs', 'windowGap'];
+        const inputIds = ['windowGap'];
         inputIds.forEach(id => {
             const el = document.getElementById(id);
             if (el) settings[id] = el.value;
@@ -264,7 +233,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Auto-save on input change/blur
-    const inputIds = ['geminiKey', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModel', 'whisperLanguage', 'whisperSegmentMs', 'windowGap'];
+    const inputIds = ['windowGap'];
     inputIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) {

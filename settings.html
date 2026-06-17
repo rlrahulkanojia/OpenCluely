@@ -280,102 +280,7 @@
                 </div>
             </div>
 
-            <!-- Section 2: AI & Speech -->
-            <div class="settings-section">
-                <div class="collapsible-header" data-section="ai-speech">
-                    <span class="arrow">▾</span>
-                    <i class="fas fa-robot"></i> AI & Speech
-                </div>
-                <div class="collapsible-body" data-section="ai-speech">
-
-                    <!-- API Key -->
-                    <div class="settings-item">
-                        <div>
-                            <div class="settings-item-label">API Key</div>
-                            <div class="settings-item-description">Gemini API key for AI features</div>
-                        </div>
-                        <input type="password" class="input-field" id="geminiKey" placeholder="Enter your API key" style="max-width: 240px;">
-                    </div>
-
-                    <!-- Speech Provider -->
-                    <div class="settings-item">
-                        <div>
-                            <div class="settings-item-label">Speech Provider</div>
-                            <div class="settings-item-description">Choose Azure Speech or local Whisper CLI</div>
-                        </div>
-                        <div class="dropdown-trigger" id="speechProviderTrigger" data-key="speechProvider">
-                            <span class="dropdown-label">Azure</span>
-                            <i class="fas fa-chevron-down chevron"></i>
-                        </div>
-                        <div class="popover dropdown-popover" id="speechProviderPopover">
-                            <div class="popover-option" data-value="azure"><span class="check">✓</span> Azure</div>
-                            <div class="popover-option" data-value="whisper"><span class="check">✓</span> Local Whisper</div>
-                        </div>
-                    </div>
-
-                    <!-- Azure Fields (shown when provider = azure) -->
-                    <div id="azureFields">
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">Azure Speech Key</div>
-                                <div class="settings-item-description">Your Azure Cognitive Services API key</div>
-                            </div>
-                            <input type="password" class="input-field" id="azureKey" placeholder="Enter your Azure key" style="max-width: 240px;">
-                        </div>
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">Azure Region</div>
-                                <div class="settings-item-description">Your Azure service region</div>
-                            </div>
-                            <input type="text" class="input-field" id="azureRegion" placeholder="e.g. eastus" style="max-width: 240px;">
-                        </div>
-                    </div>
-
-                    <!-- Whisper Fields (shown when provider = whisper) -->
-                    <div id="whisperFields" class="hidden">
-                        <!-- Advanced Whisper Settings (collapsible subsection) -->
-                        <div class="collapsible-header subsection-header" data-section="whisper-advanced">
-                            <span class="arrow">▾</span>
-                            <i class="fas fa-sliders-h"></i> Advanced Whisper Settings
-                        </div>
-                        <div class="collapsible-body" data-section="whisper-advanced">
-                            <div class="settings-item">
-                                <div class="settings-stack">
-                                    <div>
-                                        <div class="settings-item-label">Whisper Command</div>
-                                        <div class="settings-item-description">CLI command, e.g. <code>whisper</code> or <code>python3 -m whisper</code></div>
-                                    </div>
-                                    <input type="text" class="input-field" id="whisperCommand" placeholder="whisper" style="max-width: 100%;">
-                                </div>
-                            </div>
-                            <div class="settings-item">
-                                <div>
-                                    <div class="settings-item-label">Whisper Model</div>
-                                    <div class="settings-item-description">Local model name</div>
-                                </div>
-                                <input type="text" class="input-field" id="whisperModel" placeholder="base" style="max-width: 180px;">
-                            </div>
-                            <div class="settings-item">
-                                <div>
-                                    <div class="settings-item-label">Whisper Language</div>
-                                    <div class="settings-item-description">Language code for transcription</div>
-                                </div>
-                                <input type="text" class="input-field" id="whisperLanguage" placeholder="en" style="max-width: 180px;">
-                            </div>
-                            <div class="settings-item">
-                                <div>
-                                    <div class="settings-item-label">Segment Length</div>
-                                    <div class="settings-item-description">Chunk size in ms</div>
-                                </div>
-                                <input type="number" class="input-field" id="whisperSegmentMs" placeholder="4000" min="2000" step="500" style="max-width: 180px;">
-                            </div>
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-
-            <!-- Section 3: Appearance & Shortcuts -->
+            <!-- Section 2: Appearance & Shortcuts -->
             <div class="settings-section">
                 <div class="collapsible-header" data-section="appearance">
                     <span class="arrow">▾</span>
@@ -421,7 +326,6 @@
                             <tr><td><span class="kbd">⌘⇧Q</span></td><td>End session (clear memory)</td></tr>
                             <tr><td><span class="kbd">⌘⇧I</span></td><td>Toggle click-through</td></tr>
                             <tr><td><span class="kbd">⌘⇧C</span></td><td>Toggle chat window</td></tr>
-                            <tr><td><span class="kbd">Alt+R</span></td><td>Toggle speech recording</td></tr>
                             <tr><td><span class="kbd">⌘,</span></td><td>Open settings</td></tr>
                         </table>
                     </div>

@@ -50,35 +50,6 @@ class ConfigManager {
             maxOutputTokens: 16384
           }
         },
-        // Legacy Gemini config — kept for reference if switching back
-        gemini: {
-          model: 'gemini-2.5-flash',
-          maxRetries: 3,
-          timeout: 60000,
-          fallbackEnabled: true,
-          enableFallbackMethod: true,
-          generation: {
-            temperature: 0.7,
-            topK: 32,
-            topP: 0.9,
-            maxOutputTokens: 16384
-          }
-        }
-      },
-
-      speech: {
-        provider: 'azure',
-        azure: {
-          language: 'en-US',
-          enableDictation: true,
-          enableAudioLogging: false,
-          outputFormat: 'detailed'
-        },
-        whisper: {
-          model: 'base',
-          language: 'en',
-          segmentMs: 4000
-        }
       },
 
       session: {
