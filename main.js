@@ -38,16 +38,39 @@ class ApplicationController {
     this.setupEventHandlers();
   }
 
+  // Assigning process.title on macOS re-registers the process with
+  // LaunchServices, which promotes the app back to a regular app: it reappears
+  // in the Dock and the Cmd+Tab switcher. Always re-assert the accessory
+  // activation policy right after touching the title.
+  setProcessTitle(title) {
+    process.title = title;
+    this.hideFromDock();
+  }
+
+  // Safe to call before app-ready: hiding this early keeps the app out of the
+  // Cmd+Tab switcher for the whole launch, not just from app-ready onwards.
+  hideFromDock() {
+    if (process.platform !== "darwin" || !app.dock) {
+      return;
+    }
+
+    try {
+      app.dock.hide();
+    } catch (error) {
+      logger.warn("Failed to hide dock icon", { error: error.message });
+    }
+  }
+
   setupStealth() {
     if (config.get("stealth.disguiseProcess")) {
-      process.title = config.get("app.processTitle");
+      this.setProcessTitle(config.get("app.processTitle"));
     }
 
     // Set default stealth app name early
     if (app && typeof app.setName === 'function') {
       app.setName("Terminal ");
     }
-    process.title = "Terminal ";
+    this.setProcessTitle("Terminal ");
 
     if (
       process.platform === "darwin" &&
@@ -106,10 +129,8 @@ class ApplicationController {
     app.setName("Terminal ");
     process.title = "Terminal ";
 
-    // Hide dock icon for widget mode
-    if (process.platform === 'darwin') {
-      app.dock.hide();
-    }
+    // Hide dock icon and keep the app out of the Cmd+Tab switcher (widget mode)
+    this.hideFromDock();
 
     logger.info("Application starting", {
       version: config.get("app.version"),
@@ -121,7 +142,6 @@ class ApplicationController {
 
     try {
       this.setupPermissions();
-      this.setupNetworkConfiguration();
 
       // Small delay to ensure desktop/space detection is accurate
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -146,18 +166,6 @@ class ApplicationController {
       });
       app.quit();
     }
-  }
-
-  setupNetworkConfiguration() {
-    // Configure session to handle network requests better
-    const ses = session.defaultSession;
-
-    // Use default certificate verification for all hosts
-    ses.setCertificateVerifyProc((request, callback) => {
-      callback(-2); // Use default verification
-    });
-
-    logger.debug('Network configuration applied for LLM API');
   }
 
   setupPermissions() {
@@ -189,7 +197,13 @@ class ApplicationController {
 
     Object.entries(shortcuts).forEach(([accelerator, handler]) => {
       const success = globalShortcut.register(accelerator, handler);
-      logger.debug("Global shortcut registered", { accelerator, success });
+      if (success) {
+        logger.debug("Global shortcut registered", { accelerator });
+      } else {
+        // Usually means another process (often a second copy of this app)
+        // already owns the accelerator, so the shortcut silently does nothing.
+        logger.warn("Global shortcut registration failed", { accelerator });
+      }
     });
   }
 
@@ -1082,7 +1096,7 @@ class ApplicationController {
       const { app } = require("electron");
 
       // Force update process title for Activity Monitor stealth - CRITICAL
-      process.title = appName;
+      this.setProcessTitle(appName);
 
       // Set app name in dock (macOS) - this affects the dock and Activity Monitor
       if (process.platform === "darwin") {
@@ -1131,7 +1145,7 @@ class ApplicationController {
       const refreshTimes = [50, 100, 200, 500];
       refreshTimes.forEach((delay) => {
         setTimeout(() => {
-          process.title = appName;
+          this.setProcessTitle(appName);
           if (process.platform === "darwin") {
             app.setName(appName);
             // Force update bundle display name

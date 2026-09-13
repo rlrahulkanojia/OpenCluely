@@ -15,17 +15,32 @@ class LLMService {
     this.apiKey = null;
     this.baseUrl = null;
     this.modelName = null;
+    this.provider = null;
     this.globalSystemPrompt = this._loadGlobalSystemPrompt();
 
     this.initializeClient();
   }
 
   initializeClient() {
-    // Support both Claude (ANTHROPIC_*) and Gemini (GEMINI_*) env vars
-    // Prefer Anthropic/Claude if configured
-    this.apiKey = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || config.getApiKey('GEMINI');
-    this.baseUrl = process.env.ANTHROPIC_BASE_URL || config.get('llm.claude.baseUrl') || 'https://api.anthropic.com';
-    this.modelName = process.env.ANTHROPIC_MODEL || config.get('llm.claude.model') || 'claude-sonnet-4-20250514';
+    // Two wire formats are supported:
+    //   'openai'    -> OpenAI-compatible /chat/completions. This is what the
+    //                  SelfAgentic Azure AI Foundry deployment serves, and what
+    //                  most gateways speak.
+    //   'anthropic' -> Claude Messages API /v1/messages.
+    // OPENAI_* wins when set, so the Foundry model takes over without having to
+    // delete the legacy Anthropic values from .env.
+    const openAiKey = process.env.OPENAI_API_KEY;
+    this.provider = (process.env.LLM_PROVIDER || (openAiKey ? 'openai' : 'anthropic')).toLowerCase();
+
+    if (this.provider === 'openai') {
+      this.apiKey = openAiKey || process.env.LLM_API_KEY;
+      this.baseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+      this.modelName = process.env.OPENAI_MODEL || 'gpt-5.6-luna';
+    } else {
+      this.apiKey = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || config.getApiKey('GEMINI');
+      this.baseUrl = process.env.ANTHROPIC_BASE_URL || config.get('llm.claude.baseUrl') || 'https://api.anthropic.com';
+      this.modelName = process.env.ANTHROPIC_MODEL || config.get('llm.claude.model') || 'claude-sonnet-4-20250514';
+    }
 
     if (!this.apiKey || this.apiKey === 'your_gemini_api_key_here' || this.apiKey === 'your-api-key-here') {
       logger.warn('LLM API key not configured', {
@@ -36,7 +51,8 @@ class LLMService {
     }
 
     this.isInitialized = true;
-    logger.info('Claude LLM client initialized successfully', {
+    logger.info('LLM client initialized successfully', {
+      provider: this.provider,
       model: this.modelName,
       baseUrl: this.baseUrl
     });
@@ -388,30 +404,10 @@ class LLMService {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const body = {
-          model: this.modelName,
-          max_tokens: requestBody.max_tokens || 16384,
-          messages: requestBody.messages
-        };
-
-        if (requestBody.temperature !== undefined) {
-          body.temperature = requestBody.temperature;
-        }
-        if (requestBody.system) {
-          body.system = requestBody.system;
-        }
-
-        if (requestBody.thinking) {
-          body.thinking = {
-            type: "enabled",
-            budget_tokens: requestBody.thinking_budget || 10000
-          };
-          // Claude requires temperature=1 or omitted when thinking is enabled
-          delete body.temperature;
-        }
+        const { url, headers, body } = this._buildProviderPayload(requestBody, { stream: false });
 
         const postData = JSON.stringify(body);
-        const parsedUrl = new URL(`${this.baseUrl}/v1/messages`);
+        const parsedUrl = new URL(url);
         const isHttps = parsedUrl.protocol === 'https:';
         const transport = isHttps ? https : http;
 
@@ -424,15 +420,15 @@ class LLMService {
           path: parsedUrl.pathname,
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': this.apiKey,
-            'anthropic-version': '2023-06-01',
+            ...headers,
             'Content-Length': Buffer.byteLength(postData)
           },
           timeout,
           agent
         };
 
-        logger.debug(`Claude API attempt ${attempt}`, {
+        logger.debug(`LLM API attempt ${attempt}`, {
+          provider: this.provider,
           model: this.modelName,
           baseUrl: this.baseUrl,
           messageCount: requestBody.messages.length,
@@ -452,41 +448,32 @@ class LLMService {
                 }
 
                 const response = JSON.parse(data);
+                const parsed = this.provider === 'openai'
+                  ? this._parseOpenAIResponse(response)
+                  : this._parseAnthropicResponse(response);
 
-                // Extract thinking blocks (extended thinking)
-                const thinkingBlocks = (response.content || [])
-                  .filter(block => block.type === 'thinking')
-                  .map(block => block.thinking);
-
-                // Extract text blocks
-                const textBlocks = (response.content || [])
-                  .filter(block => block.type === 'text')
-                  .map(block => block.text);
-
-                if (!textBlocks.length) {
-                  reject(new Error('No text content in Claude response'));
+                if (!parsed.text) {
+                  reject(new Error('No text content in LLM response'));
                   return;
                 }
 
-                const text = textBlocks.join('\n');
-                const thinking = thinkingBlocks.length ? thinkingBlocks.join('\n') : null;
-
-                if (response.stop_reason === 'max_tokens') {
-                  logger.warn('Claude response reached max tokens limit');
+                if (parsed.stopReason === 'max_tokens') {
+                  logger.warn('LLM response reached max tokens limit');
                 }
 
-                logger.debug('Claude API request successful', {
+                logger.debug('LLM API request successful', {
                   attempt,
-                  responseLength: text.length,
-                  hasThinking: !!thinking,
-                  stopReason: response.stop_reason,
-                  inputTokens: response.usage?.input_tokens,
-                  outputTokens: response.usage?.output_tokens
+                  provider: this.provider,
+                  responseLength: parsed.text.length,
+                  hasThinking: !!parsed.thinking,
+                  stopReason: parsed.stopReason,
+                  inputTokens: parsed.inputTokens,
+                  outputTokens: parsed.outputTokens
                 });
 
-                resolve({ text, thinking });
+                resolve({ text: parsed.text, thinking: parsed.thinking });
               } catch (parseError) {
-                reject(new Error(`Failed to parse Claude response: ${parseError.message}`));
+                reject(new Error(`Failed to parse LLM response: ${parseError.message}`));
               }
             });
           });
@@ -537,31 +524,10 @@ class LLMService {
   async _makeClaudeStreamingRequest(requestBody, callbacks = {}) {
     const timeout = config.get('llm.claude.timeout') || 60000;
 
-    const body = {
-      model: this.modelName,
-      max_tokens: requestBody.max_tokens || 16384,
-      messages: requestBody.messages,
-      stream: true
-    };
-
-    if (requestBody.temperature !== undefined) {
-      body.temperature = requestBody.temperature;
-    }
-    if (requestBody.system) {
-      body.system = requestBody.system;
-    }
-
-    if (requestBody.thinking) {
-      body.thinking = {
-        type: "enabled",
-        budget_tokens: requestBody.thinking_budget || 10000
-      };
-      // Claude requires temperature=1 or omitted when thinking is enabled
-      delete body.temperature;
-    }
+    const { url, headers, body } = this._buildProviderPayload(requestBody, { stream: true });
 
     const postData = JSON.stringify(body);
-    const parsedUrl = new URL(`${this.baseUrl}/v1/messages`);
+    const parsedUrl = new URL(url);
     const isHttps = parsedUrl.protocol === 'https:';
     const transport = isHttps ? https : http;
 
@@ -574,15 +540,15 @@ class LLMService {
       path: parsedUrl.pathname,
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
+        ...headers,
         'Content-Length': Buffer.byteLength(postData)
       },
       timeout,
       agent: httpAgent
     };
 
-    logger.debug('Claude streaming API request', {
+    logger.debug('LLM streaming API request', {
+      provider: this.provider,
       model: this.modelName,
       baseUrl: this.baseUrl,
       messageCount: requestBody.messages.length,
@@ -631,6 +597,7 @@ class LLMService {
                 const event = JSON.parse(jsonStr);
                 this._handleStreamEvent(event, {
                   onStart: () => {
+                    if (streamStarted) return;
                     streamStarted = true;
                     if (callbacks.onStart) callbacks.onStart();
                   },
@@ -673,7 +640,7 @@ class LLMService {
             thinking: thinkingAccumulator || null
           };
 
-          logger.debug('Claude streaming request completed', {
+          logger.debug('LLM streaming request completed', {
             responseLength: textAccumulator.length,
             hasThinking: !!thinkingAccumulator
           });
@@ -712,9 +679,169 @@ class LLMService {
   }
 
   /**
+   * Translate the Anthropic-shaped request this service builds internally into
+   * OpenAI /chat/completions messages. Only what the app actually sends is
+   * covered: an optional system prompt, plain-text turns, and the image + text
+   * turn that screenshot capture produces.
+   */
+  _toOpenAIMessages(requestBody) {
+    const messages = [];
+
+    if (requestBody.system) {
+      messages.push({ role: 'system', content: requestBody.system });
+    }
+
+    for (const msg of requestBody.messages) {
+      if (typeof msg.content === 'string') {
+        messages.push({ role: msg.role, content: msg.content });
+        continue;
+      }
+
+      const parts = (msg.content || []).map(block => {
+        if (block.type === 'image' && block.source) {
+          return {
+            type: 'image_url',
+            image_url: {
+              url: `data:${block.source.media_type};base64,${block.source.data}`
+            }
+          };
+        }
+        return { type: 'text', text: block.text || '' };
+      });
+
+      messages.push({ role: msg.role, content: parts });
+    }
+
+    return messages;
+  }
+
+  /**
+   * Build the URL, provider-specific headers and body for a single request.
+   */
+  _buildProviderPayload(requestBody, { stream = false } = {}) {
+    if (this.provider === 'openai') {
+      const body = {
+        model: this.modelName,
+        messages: this._toOpenAIMessages(requestBody),
+        // Newer OpenAI models reject max_tokens outright and want this name.
+        max_completion_tokens: requestBody.max_tokens || 16384
+      };
+
+      if (stream) {
+        body.stream = true;
+      }
+
+      // temperature is deliberately omitted: gpt-5.6-luna answers anything but
+      // the default 1 with `unsupported_value`. The extended-thinking fields are
+      // dropped too — they have no equivalent on this surface.
+
+      return {
+        url: `${this.baseUrl}/chat/completions`,
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        body
+      };
+    }
+
+    const body = {
+      model: this.modelName,
+      max_tokens: requestBody.max_tokens || 16384,
+      messages: requestBody.messages
+    };
+
+    if (requestBody.temperature !== undefined) {
+      body.temperature = requestBody.temperature;
+    }
+    if (requestBody.system) {
+      body.system = requestBody.system;
+    }
+    if (requestBody.thinking) {
+      body.thinking = {
+        type: "enabled",
+        budget_tokens: requestBody.thinking_budget || 10000
+      };
+      // Claude requires temperature=1 or omitted when thinking is enabled
+      delete body.temperature;
+    }
+    if (stream) {
+      body.stream = true;
+    }
+
+    return {
+      url: `${this.baseUrl}/v1/messages`,
+      headers: {
+        'x-api-key': this.apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body
+    };
+  }
+
+  _parseAnthropicResponse(response) {
+    const thinkingBlocks = (response.content || [])
+      .filter(block => block.type === 'thinking')
+      .map(block => block.thinking);
+
+    const textBlocks = (response.content || [])
+      .filter(block => block.type === 'text')
+      .map(block => block.text);
+
+    return {
+      text: textBlocks.join('\n'),
+      thinking: thinkingBlocks.length ? thinkingBlocks.join('\n') : null,
+      stopReason: response.stop_reason,
+      inputTokens: response.usage?.input_tokens,
+      outputTokens: response.usage?.output_tokens
+    };
+  }
+
+  _parseOpenAIResponse(response) {
+    const choice = (response.choices || [])[0] || {};
+    const message = choice.message || {};
+    const text = typeof message.content === 'string'
+      ? message.content
+      : (message.content || []).map(part => part.text || '').join('');
+
+    return {
+      text,
+      thinking: message.reasoning_content || null,
+      // Normalised so the max-tokens warning below fires for both providers.
+      stopReason: choice.finish_reason === 'length' ? 'max_tokens' : choice.finish_reason,
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens
+    };
+  }
+
+  /**
+   * Handle one SSE chunk from an OpenAI-compatible stream, mapped onto the same
+   * handler interface the Anthropic events use.
+   */
+  _handleOpenAIStreamEvent(event, handlers) {
+    const choice = (event.choices || [])[0];
+    if (!choice) return;
+
+    // These streams have no message_start event, so the first chunk doubles as
+    // the start signal. onStart is idempotent, so repeating it is harmless.
+    if (handlers.onStart) handlers.onStart();
+
+    const delta = choice.delta || {};
+
+    if (delta.reasoning_content && handlers.onThinkingDelta) {
+      handlers.onThinkingDelta(delta.reasoning_content);
+    }
+    if (delta.content && handlers.onTextDelta) {
+      handlers.onTextDelta(delta.content);
+    }
+  }
+
+  /**
    * Handle a single SSE event from the Claude streaming API.
    */
   _handleStreamEvent(event, handlers) {
+    if (this.provider === 'openai') {
+      this._handleOpenAIStreamEvent(event, handlers);
+      return;
+    }
+
     switch (event.type) {
       case 'message_start':
         if (handlers.onStart) handlers.onStart();

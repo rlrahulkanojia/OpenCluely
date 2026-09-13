@@ -376,7 +376,7 @@ class WindowManager {
     }
 
     // Ensure window appears on all workspaces/desktops initially
-    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     
     // Hide from taskbar to maintain stealth
     window.setSkipTaskbar(true);
@@ -456,9 +456,12 @@ class WindowManager {
     if (!win || win.isDestroyed()) return;
 
     if (process.platform === 'darwin') {
-      // macOS: prevent space switching and keep visibility stable
+      // macOS: prevent space switching and keep visibility stable.
+      // skipTransformProcessType keeps Electron from flipping the process type
+      // back to a regular app (which puts it in the Dock and Cmd+Tab switcher);
+      // the accessory policy is owned by the dock-hide in main.js.
       win.hide();
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
 
       try {
         win.setAlwaysOnTop(true, 'floating', 1);
@@ -474,18 +477,18 @@ class WindowManager {
         setTimeout(() => {
           if (win.isDestroyed()) return;
           try { win.setAlwaysOnTop(true, 'floating', 1); } catch { win.setAlwaysOnTop(true); }
-          win.setVisibleOnAllWorkspaces(false);
+          win.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
         }, 200);
       }, 50);
     } else {
       // Linux/Windows
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
       win.setAlwaysOnTop(true);
       win.show();
       win.focus();
       setTimeout(() => {
         if (win.isDestroyed()) return;
-        win.setVisibleOnAllWorkspaces(false);
+        win.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
         win.setAlwaysOnTop(true);
       }, 500);
     }
